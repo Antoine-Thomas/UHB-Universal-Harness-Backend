@@ -445,3 +445,148 @@ public on purpose, so the contract can be reviewed before the code is.
 Hermes is not a control plane: it lacks the UI, crons, and notifications layers
 that define a control plane. It is a runtime that executes tasks and manages the 8
 pivot functions.
+
+---
+
+## 8. Examples
+
+Three complete flows. The first two are buildable today with the measured contracts;
+the third is the primary path for DSH and depends on a control plane that does not
+exist yet.
+
+### 8.1 Harness Maxxing → UHB → DeepSeek v4.1
+
+```
+┌──────────────┐  spawn + stream-json   ┌──────────────┐  HTTP  ┌──────────────┐
+│ Harness      │───────────────────────▶│ UHB fake CLI │───────▶│ DeepSeek 4.1 │
+│ Maxxing UI   │◀───────────────────────│ (binary)     │◀───────│ /v1/chat/…   │
+└──────────────┘  SSE (product side)    └──────────────┘  SSE   └──────────────┘
+```
+
+The user clicks Start. Harness Maxxing spawns its runner, which launches the binary
+it finds in `MAXXING_CLAUDE_BIN` (here: the UHB adapter):
+
+```bash
+uhb-claude -p --output-format stream-json --verbose \
+  --model deepseek/deepseek-v4.1-flash \
+  --input-format stream-json --session-id 4f1c9a2e
+```
+
+The prompt arrives on stdin, one JSONL line, stdin left open for a steer:
+
+```json
+{"type":"user","message":{"role":"user","content":[{"type":"text","text":"fix the failing test"}]}}
+```
+
+The adapter resolves the model (`resolve_provider`) and calls the runtime. Tools
+declared by the control plane are translated from Anthropic `input_schema` to
+OpenAI `parameters`:
+
+```json
+POST http://127.0.0.1:8101/v1/chat/completions
+{"model":"deepseek-v4.1-flash","stream":true,
+ "messages":[{"role":"system","content":"You are a coding agent."},
+             {"role":"user","content":"fix the failing test"}],
+ "tools":[{"type":"function","function":{"name":"bash","parameters":{"type":"object"}}}]}
+```
+
+Each delta is translated back to the stream-json line Harness Maxxing expects, so
+its normaliser (`sessions/normalize.py`) turns it into a tool card and then text:
+
+```json
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"call_1","name":"bash","input":{"cmd":"pytest -q"}}]},"session_id":"4f1c9a2e"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"The assertion is about…"}]},"session_id":"4f1c9a2e"}
+{"type":"result","subtype":"success","is_error":false,"session_id":"4f1c9a2e","usage":{"input_tokens":1842,"output_tokens":233}}
+```
+
+The UI shows the tool card, the failing output and the diff, live. Nothing in
+Harness Maxxing was patched: it believes it ran `claude`.
+
+### 8.2 OpenClaw → UHB → Hermes
+
+```
+Telegram ──▶ ┌──────────┐  execute_task()   ┌──────────┐  HTTP  ┌─────────┐
+             │ Gateway  │──────────────────▶│ UHB      │───────▶│ Hermes  │
+             │ OpenClaw │◀─ StreamEvent ────│ backend  │◀───────│ runtime │
+             └──────────┘                   └──────────┘        └─────────┘
+```
+
+The v0.1 path is a CLI backend plugin: OpenClaw owns the turn, the adapter only has
+to speak the process contract.
+
+```ts
+api.registerCliBackend({
+  id: "uhb-cli", modelProvider: "uhb",
+  config: {
+    command: "uhb-cli",
+    args: ["--output-format", "stream-json", "--input-format", "stream-json"],
+    output: "jsonl", jsonlDialect: "claude-stream-json",
+    sessionArgs: ["--session", "{sessionId}"], sessionMode: "existing",
+    serialize: true,
+  },
+});
+```
+
+A Telegram message becomes a gateway turn; the adapter receives the prompt on
+stdin and answers by calling Hermes through the 8 functions:
+
+```ts
+// inside the adapter, one per turn
+const stream = backend.execute_task(message.text, {
+  session_id: ctx.sessionId, workspace: "/srv/workspace",
+  system: ctx.systemPrompt, tools: ctx.tools.map(toToolSpec),
+  model_ref: "hermes/local",
+});
+for await (const ev of stream) emitStreamJson(ev);   // back to OpenClaw on stdout
+```
+
+v0.1 covers 5 of the 8 functions (`execute_task`, `stream`, `cancel`, `health`,
+`resolve_provider`) — enough for a working primary runtime. v0.2 moves to
+`AgentHarnessV2` and adds `sync_memory`, `load_skill`, `route_model`, so memory and
+skills stop being the control plane's private business.
+
+### 8.3 UHB-native control plane → UHB → DSH
+
+```
+┌──────────────┐  8 UHB functions   ┌──────────┐  events  ┌──────────────┐
+│ UHB-native   │───────────────────▶│ UHB      │─────────▶│ DSH          │
+│ control plane│◀── StreamEvent ────│ router   │◀─────────│ agent loop   │
+└──────────────┘                    └──────────┘          └──────┬───────┘
+                                                         session.jsonl │
+                                                            (append-only)
+```
+
+This path is hypothetical: the control plane does not exist yet. It is still the
+one that shows why DSH matters — no model protocol is translated here, UHB only
+carries tasks and events, and DSH's own model adapter talks to whatever endpoint is
+configured.
+
+```ts
+// the control plane side: the same 8 functions, no translation layer
+const task = uhb.execute_task("summarise this repository", {
+  session_id: "s-01",
+  workspace: "/srv/repo",
+  model_ref: "dsh/deepseek-v4.1-flash",
+  tools: [],                      // DSH owns the sandbox and its own tools
+});
+for await (const ev of task) render(ev);
+
+// cancel is a waterfall interruption, not a process kill
+await uhb.cancel("t-42");         // → { cancelled: true, already_done: false }
+```
+
+Because DSH's session log is append-only, `stream` can replay it and UHB can offer
+what a stateless proxy cannot: a task that survives its own transport.
+
+```json
+{"seq":1,"type":"start","task_id":"t-42","model_ref":"dsh/deepseek-v4.1-flash"}
+{"seq":2,"type":"tool_call","id":"c1","name":"read_file","input":{"path":"README.md"}}
+{"seq":3,"type":"tool_result","id":"c1","ok":true,"output":"# UHB — …"}
+{"seq":4,"type":"end","task_id":"t-42","reason":"done"}
+```
+
+Forking a session is then a log operation, not a product feature: the control plane
+replays up to `seq:2` on a branch and continues. The Cordis binding that wires these
+eight functions into the DSH plugin API is the adapter's job, and its exact surface
+is **[TO VERIFY]** against a pinned DSH version — the log format above is the part
+the contract can already pin down.
