@@ -82,11 +82,10 @@ existing control planes — and testable without a UI.
 
 - **v0.1 — draft.** The eight functions, three protocols and the state machine are
   written and reviewed; they can still change before v1.0.
-- **Reference implementation exists**: Hermes Home Vision
-  (github.com/Antoine-Thomas/hermes-home-vision) implements the contract as a
-  runtime, with the adapter in `hermes-home-vision/uhb/`. The spec lives here, the
-  implementation lives there. That repository is currently private: this spec is
-  public on purpose, so the contract can be reviewed before the code is.
+- **A reference implementation is being developed** at
+  github.com/Antoine-Thomas/hermes-home-vision (currently private). The spec is
+  public on purpose: the contract is published so it can be reviewed before the
+  code is.
 - **3 adapters planned**, tracked as issues: Harness Maxxing (fake CLI), OpenClaw
   (CLI backend, then AgentHarnessV2), DeepSeek Harness (Cordis plugin).
 

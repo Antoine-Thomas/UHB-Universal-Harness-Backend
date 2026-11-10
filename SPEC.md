@@ -436,8 +436,8 @@ Backend is usable as a primary runtime, not a text-only fallback.
 
 ### Decision: Hermes as Runtime + Reference Backend
 
-Hermes Home Vision (github.com/Antoine-Thomas/hermes-home-vision) is the reference
-implementation of the UHB contract as a runtime. The adapter lives in
+A reference implementation is being developed at
+github.com/Antoine-Thomas/hermes-home-vision, as a runtime. The adapter lives in
 `hermes-home-vision/uhb/`, not in this repository. The specification lives here;
 the implementation lives there. That repository is currently private: this spec is
 public on purpose, so the contract can be reviewed before the code is.
