@@ -1,0 +1,3 @@
+[submodule "uhb/services/mari/framework"]
+	path = uhb/services/mari/framework
+	url = https://github.com/Antoine-Thomas/mari.git

@@ -1,0 +1,14 @@
+# RAG service (port 8200) — the optional half of the second brain.
+#
+# Expect roughly 1.5 GB on disk after install: torch (CPU wheel), faiss, flashrank,
+# then the embedding model downloaded from Hugging Face on first use.
+#
+#   python -m pip install -r uhb/services/rag/requirements.txt
+#
+fastapi>=0.110
+uvicorn>=0.27
+pydantic>=2
+numpy>=1.26
+faiss-cpu>=1.7.4
+sentence-transformers>=2.6
+flashrank>=0.2

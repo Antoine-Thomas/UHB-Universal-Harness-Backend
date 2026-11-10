@@ -1,0 +1,18 @@
+# Configuration used by the containerised UHB (`docker-compose.yml`).
+# Mounted read-only at /app/config.yaml. Same two sections `uhb config` writes:
+# `providers` and `routing`, and it carries variable NAMES, never values.
+providers:
+  ollama:
+    protocol: openai
+    base_url: http://host.docker.internal:11434/v1
+    model: qwen3:8b
+    local: true
+  deepseek:
+    protocol: openai
+    base_url: https://api.deepseek.com/v1
+    model: deepseek-flash
+    api_key_env: DEEPSEEK_API_KEY
+routing:
+  default: deepseek/deepseek-flash
+  fallback: ollama/qwen3:8b
+  allow_paid: false

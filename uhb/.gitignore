@@ -1,0 +1,5 @@
+# Local configuration and build artefacts stay out of the repository.
+config.yaml
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,0 +1,18 @@
+{
+  "name": "observe",
+  "description": "Watch the system and write it down. Local model, free tier, append-only notes.",
+  "kind": "execution",
+  "read": ["wiki/**", "logs/**", "data/**", "**/*.log"],
+  "write": ["wiki/log.md", "reports/**"],
+  "deny": ["**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/secrets/**"],
+  "tools": ["read_file", "search", "probe"],
+  "system_prompt": "You watch a running system and record what you measured, not what you expect.",
+  "constraints": [
+    "Every statement carries a raw measurement, with its command or file.",
+    "A missing measure is reported as missing; never estimated to fill a gap.",
+    "You append to the log and to reports. You never edit a source of truth."
+  ],
+  "model": {"tier": "free", "temperature": 0.0, "max_tokens": 2048},
+  "allow_paid": false,
+  "max_turns": 5
+}

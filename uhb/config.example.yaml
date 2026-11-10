@@ -1,0 +1,45 @@
+# UHB provider table — copy to `uhb/config.yaml` (git-ignored).
+#
+# Only variable NAMES live here. No key, no token, no personal path: the adapter
+# reads the value from the environment at call time, and the contract never
+# carries it.
+providers:
+  deepseek:
+    protocol: deepseek
+    base_url: https://api.deepseek.com/v1
+    api_key_env: DEEPSEEK_API_KEY
+    models: [deepseek-v4-pro, deepseek-flash]
+  anthropic:
+    protocol: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+    models: [claude-sonnet-5, claude-haiku-4-5]
+  openai:
+    protocol: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+    models: [gpt-5, gpt-5-mini]
+  kimi:
+    protocol: openai
+    base_url: https://api.moonshot.cn/v1
+    api_key_env: KIMI_API_KEY
+    models: [moonshot-v1-128k]
+  ollama:
+    protocol: openai
+    base_url: http://127.0.0.1:11434/v1
+    api_key_env: OLLAMA_API_KEY  # unused by a local Ollama, kept for the shape
+    models: ["qwen3:8b", "llama3.3:70b"]
+
+# Routing: intents in, model references out. First matching rule wins, and the
+# `default` is the fallback when nothing matches.
+routing:
+  default: deepseek/deepseek-v4-pro
+  rules:
+    - match: {capability: fast}
+      model: deepseek/deepseek-flash
+    - match: {capability: code, min_context: 128000}
+      model: deepseek/deepseek-v4-pro
+    - match: {capability: vision}
+      model: anthropic/claude-sonnet-5
+    - match: {locality: local}
+      model: ollama/qwen3:8b

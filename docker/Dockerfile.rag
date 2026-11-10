@@ -1,0 +1,24 @@
+# RAG service, container image (optional).
+#
+# The index is NOT baked in: `uhb/services/rag` is mounted at /app by
+# docker-compose.yml, so the container sees whatever index you built locally.
+# Without one, /sante answers fragments: 0 — honestly empty, never invented.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+# faiss needs the OpenMP runtime; slim images do not ship it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libgomp1 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY uhb/services/rag/requirements.txt ./requirements.txt
+RUN python -m pip install -r requirements.txt
+
+COPY uhb/services/rag/*.py ./
+
+EXPOSE 8200
+CMD ["python", "serveur_rag.py", "--hote", "0.0.0.0", "--port", "8200"]

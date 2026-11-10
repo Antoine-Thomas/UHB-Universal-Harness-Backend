@@ -1,0 +1,60 @@
+# UHB, full stack — the backend plus its optional second brain.
+#
+#   docker compose up -d            # uhb + rag + siyuan
+#   docker compose up -d uhb siyuan # without the RAG (no index, no torch download)
+#   docker compose down
+#
+# Every published port is bound to 127.0.0.1: this stack is local by design, and a
+# machine on the network must not reach your notes.
+#
+#   uhb        http://127.0.0.1:8101   panel, /status, /docs/manuel.pdf
+#   rag        http://127.0.0.1:8200   /sante, /search
+#   siyuan     http://127.0.0.1:6806   the editor, if you want one
+name: uhb
+
+services:
+  uhb:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.uhb
+    ports:
+      - "127.0.0.1:8101:8101"
+    environment:
+      # A container cannot reach the host's 127.0.0.1: point it at host.docker.internal
+      # for a local Ollama, or leave it empty and let the router skip that provider.
+      UHB_LLM_BASE_URL: ${UHB_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
+      UHB_LLM_MODEL: ${UHB_LLM_MODEL:-qwen3:8b}
+      # The harness binary lives on the host; mount it or leave this unset.
+      UHB_HERMES_BIN: ${UHB_HERMES_BIN:-}
+      UHB_CONFIG: /app/config.yaml
+    volumes:
+      - ./config.docker.yaml:/app/config.yaml:ro
+    restart: unless-stopped
+    depends_on:
+      - rag
+      - siyuan
+
+  rag:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.rag
+    ports:
+      - "127.0.0.1:8200:8200"
+    volumes:
+      # Code and index live together: chercher.py resolves its files next to itself.
+      - ./uhb/services/rag:/app
+    restart: unless-stopped
+
+  siyuan:
+    image: b3log/siyuan:v3.8.10
+    # Since 3.8.x the kernel requires the explicit `serve` subcommand.
+    command:
+      - serve
+      - --workspace=/siyuan/workspace/
+      - --port=6806
+      - --accessAuthCode=${SIYUAN_AUTH_CODE:-}
+    ports:
+      - "127.0.0.1:6806:6806"
+    volumes:
+      - ./uhb/data/siyuan:/siyuan/workspace
+    restart: unless-stopped

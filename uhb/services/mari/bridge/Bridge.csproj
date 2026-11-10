@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <!-- Le framework MARI est un submodule (MIT, fork de kaonomi-net/mari).
+       L'initialiser avec 'git submodule update' avant de compiler.
+       Separateurs en '/' : valides sous MSBuild sur Windows et Linux. -->
+  <ItemGroup>
+      <ProjectReference Include="../framework/src/Frameworks/MARI.Framework.Node/MARI.Framework.Node.csproj" />
+      <ProjectReference Include="../framework/src/Frameworks/MARI.Framework.Builders/MARI.Framework.Builders.csproj" />
+      <ProjectReference Include="../framework/src/Frameworks/MARI.Framework.Core.Abstractions/MARI.Framework.Core.Abstractions.csproj" />
+      <ProjectReference Include="../framework/src/Frameworks/MARI.Framework.Core/MARI.Framework.Core.csproj" />
+      <ProjectReference Include="../framework/src/Frameworks/MARI.Framework.Node.Abstractions/MARI.Framework.Node.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>
