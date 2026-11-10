@@ -62,6 +62,21 @@ server's systemd unit reaches the `claude` process. Caveat: that variable sits i
 not present this path as a hook. **[hypothesis]** it works, but it is not a
 contract.
 
+### Decision: fake CLI (`MAXXING_CLAUDE_BIN`)
+
+We chose the fake CLI path over the Anthropic proxy because:
+
+1. It is the mechanism sanctioned by Harness Maxxing's own test suite
+   (`server/tests/fake_claude.py`, 541 lines).
+2. `ANTHROPIC_BASE_URL` is in Harness Maxxing's `_RESERVED` list (a secret vault
+   cannot set it), which makes the proxy path non-contractual and fragile.
+3. The fake CLI contract is fully documented: argv, stdin `stream-json`, stdout
+   JSONL types `assistant`/`user`/`result`/`system`/`control_response`,
+   interruption through `control_request` subtype `interrupt`.
+
+The UHB adapter is an independent reimplementation. Harness Maxxing is Fair Source,
+not MIT; copying `fake_claude.py` verbatim would violate the license.
+
 ### What the adapter must supply
 
 A binary that speaks the contract above (`execute_task` ≈ one invocation per turn,
@@ -143,6 +158,17 @@ on all three points:
 
 The Korean mirror is **stale**: useful for describing the conservative default
 behaviour, not the state of the art.
+
+### Decision: CLI Backend for v0.1, AgentHarnessV2 for v0.2
+
+The CLI Backend is not a downgrade: it covers 5 of the 8 pivot functions
+(`execute_task`, `stream`, `cancel`, `health`, `resolve_provider`). The
+AgentHarnessV2 adds the 3 remaining functions (`sync_memory`, `load_skill`,
+`route_model`).
+
+Two levels of capability, not two versions of stability. The 4 existing
+implementations (`extensions/muse`, `copilot`, `acpx`, `codex`) confirm that CLI
+Backend is usable as a primary runtime, not a text-only fallback.
 
 ### What the adapter must supply
 

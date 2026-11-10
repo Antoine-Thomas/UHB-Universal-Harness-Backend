@@ -150,6 +150,12 @@ one whose execution contract is documented as a contract.
 Suggested reading order: this README, then `SPEC.md` §2, then `ARCHITECTURE.md`,
 then `ADAPTERS.md`. The rest is context.
 
+**Reference implementation.** Hermes Home Vision
+(github.com/Antoine-Thomas/hermes-home-vision) is the reference implementation of
+this contract as a runtime: the adapter lives in `hermes-home-vision/uhb/`, not
+here. The specification lives in this repository; the implementation lives there.
+See [SPEC.md](SPEC.md) §7.
+
 A remark about the contract goes through an issue titled `Spec: <topic>`; a new
 control plane through an issue titled `Adapter: <name>`. See
 [CONTRIBUTING.md](CONTRIBUTING.md).

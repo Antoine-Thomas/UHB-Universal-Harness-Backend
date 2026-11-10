@@ -403,3 +403,45 @@ Reading: "Support" qualifies the product's ability to host an external backend
 **without being patched**. "Runtime" means the product executes and is a candidate
 backend, not a host; "Partial" means a door exists, without a documented execution
 contract.
+
+### Decision: fake CLI (`MAXXING_CLAUDE_BIN`)
+
+We chose the fake CLI path over the Anthropic proxy because:
+
+1. It is the mechanism sanctioned by Harness Maxxing's own test suite
+   (`server/tests/fake_claude.py`, 541 lines).
+2. `ANTHROPIC_BASE_URL` is in Harness Maxxing's `_RESERVED` list (a secret vault
+   cannot set it), which makes the proxy path non-contractual and fragile.
+3. The fake CLI contract is fully documented: argv, stdin `stream-json`, stdout
+   JSONL types `assistant`/`user`/`result`/`system`/`control_response`,
+   interruption through `control_request` subtype `interrupt`.
+
+The UHB adapter is an independent reimplementation. Harness Maxxing is Fair Source,
+not MIT; copying `fake_claude.py` verbatim would violate the license.
+
+### Decision: CLI Backend for v0.1, AgentHarnessV2 for v0.2
+
+The CLI Backend is not a downgrade: it covers 5 of the 8 pivot functions
+(`execute_task`, `stream`, `cancel`, `health`, `resolve_provider`). The
+AgentHarnessV2 adds the 3 remaining functions (`sync_memory`, `load_skill`,
+`route_model`).
+
+Two levels of capability, not two versions of stability. The 4 existing
+implementations (`extensions/muse`, `copilot`, `acpx`, `codex`) confirm that CLI
+Backend is usable as a primary runtime, not a text-only fallback.
+
+---
+
+## 7. Reference implementation
+
+### Decision: Hermes as Runtime + Reference Backend
+
+Hermes Home Vision (github.com/Antoine-Thomas/hermes-home-vision) is the reference
+implementation of the UHB contract as a runtime. The adapter lives in
+`hermes-home-vision/uhb/`, not in this repository. The specification lives here;
+the implementation lives there. That repository is currently private: this spec is
+public on purpose, so the contract can be reviewed before the code is.
+
+Hermes is not a control plane: it lacks the UI, crons, and notifications layers
+that define a control plane. It is a runtime that executes tasks and manages the 8
+pivot functions.
