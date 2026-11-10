@@ -154,8 +154,13 @@ install_services.sh|.ps1       thin wrappers -> python -m uhb.services.install
 Clone with the submodule, or the MARI build will refuse with a message saying so:
 
 ```bash
+# one shot (Linux, macOS, and Windows from cmd or PowerShell)
 git clone --recurse-submodules https://github.com/Antoine-Thomas/UHB-Universal-Harness-Backend.git
-# already cloned?  git submodule update --init
+
+# Windows + Git Bash: the one-shot form can fail with "not a git repository: /tmp/...",
+# a path quirk of the submodule helper, not of this repository. Two steps work:
+git clone https://github.com/Antoine-Thomas/UHB-Universal-Harness-Backend.git
+cd UHB-Universal-Harness-Backend && git submodule update --init
 ```
 
 `install.sh --full` chains everything: the package, SiYuan (sha256-verified download),
