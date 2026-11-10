@@ -163,7 +163,45 @@ les CLI backends ; expérimental mais supporté pour les agent harness.
 
 ---
 
-## 3. Hermes
+## 3. DeepSeek Harness (DSH)
+
+**Nature — runtime d'exécution, pas un control plane.** DSH détient l'agent loop, le
+sandbox, les outils et le journal de session ; il ne possède ni UI produit, ni crons,
+ni notifications. C'est le seul produit de cette liste déjà model-agnostic **et**
+plugin-based : « tout est plugin » via Cordis, avec DeepSeek, OpenAI, Anthropic et des
+endpoints personnalisés en natif. Il n'a donc pas besoin d'être rendu universel — il a
+besoin d'un contrat pour être utilisable depuis un control plane.
+
+### Contrat fourni
+
+Plugin Cordis natif. Journal de session append-only, replayable et forkable. Agent
+loop remplaçable via un waterfall `pre-step` / `request` / `request-error`. Sandbox,
+outils et plugins sont des composants Cordis. Statut : **developer preview**, breaking
+changes annoncés.
+
+### Voie d'intégration
+
+**Voie principale** — DSH runtime derrière un control plane UHB-native : le control
+plane parle les 8 fonctions, l'UHB route vers DSH, DSH exécute (sandbox, outils,
+journal) et appelle le modèle via son propre model adapter. Aucun protocole de modèle
+n'est traduit dans cette voie : UHB transporte des tâches et des événements.
+
+**Voie secondaire** — un plugin DSH exposant les 8 fonctions aux control planes
+existants (Harness Maxxing, OpenClaw) : `execute_task` sur l'agent loop, `cancel` sur
+le waterfall, `stream` sur le journal append-only (replay et fork deviennent des
+capacités du backend), `health` sans inférence.
+
+### Effort et risque
+
+Effort : 2 à 4 semaines pour la voie secondaire ; la voie principale dépend d'un
+control plane UHB-native aujourd'hui inexistant, donc non chiffrable isolément.
+Risque moyen à élevé : developer preview, breaking changes annoncés, le contrat peut
+bouger sans préavis. DSH est donc marqué **`supported, experimental`** (SPEC.md §6),
+et un adapter DSH se teste contre une version épinglée, jamais contre `main`.
+
+---
+
+## 4. Hermes
 
 **Contrat fourni** — aucun contrat d'exécution externe documenté à ce jour. Hermes
 est un runtime d'agent complet (gateway, profils, skills, mémoire, plugins), pas un
@@ -187,13 +225,14 @@ est le vrai travail. Un adapter qui réimplémente le routage divergera à la pr
 
 ---
 
-## 4. Synthèse
+## 5. Synthèse
 
-| Control plane | Contrat d'exécution | Primary possible | Risque | Effort |
-|---|---|---|---|---|
-| Harness Maxxing | aucun (fake CLI + proxy) | oui, non contractuel | élevé | 1–3 sem. |
-| OpenClaw | `registerCliBackend` + `registerAgentHarness` | oui | moyen | 1–2 sem. |
-| Hermes | aucun | oui, par extraction | élevé | 2–3 sem. |
+| Produit | Nature | Contrat d'exécution | Primary possible | Risque | Effort |
+|---|---|---|---|---|---|
+| Harness Maxxing | control plane | aucun (fake CLI + proxy) | oui, non contractuel | élevé | 1–3 sem. |
+| OpenClaw | control plane | `registerCliBackend` + `registerAgentHarness` | oui | moyen | 1–2 sem. |
+| DeepSeek Harness | runtime | plugin Cordis : les 8 fonctions sont à exposer | oui, comme backend | moyen à élevé | 2–4 sem. |
+| Hermes | runtime | aucun | oui, par extraction | élevé | 2–3 sem. |
 
 Le seul contrat **documenté comme un contrat** est celui d'OpenClaw. Les deux autres
 portes existent et fonctionnent : c'est pourquoi le UHB a une valeur — nommer et

@@ -81,9 +81,8 @@ interface HealthStatus     { ok: boolean; version: string; queue_depth: number; 
 
 ## 2. Les huit fonctions pivot
 
-Chaque fonction DOIT exister. Une fonction qui n'a pas de sens pour un runtime
-donné DOIT renvoyer une erreur explicite (`code: "unsupported"`) — jamais un succès
-silencieux.
+Chaque fonction DOIT exister. Une fonction sans sens pour un runtime donné DOIT
+renvoyer une erreur explicite (`code: "unsupported"`), jamais un succès silencieux.
 
 ### 2.1 `execute_task`
 
@@ -383,15 +382,19 @@ effet de bord.
 
 ## 6. Compatibilité
 
-Mesuré en Phase 0 sur les dépôts publics ; détail et preuves dans
-[ADAPTERS.md](ADAPTERS.md).
+Mesuré en Phase 0 sur les dépôts publics ; preuves dans [ADAPTERS.md](ADAPTERS.md).
 
-| Control Plane | Support | Voie d'intégration | Coût estimé |
+| Control Plane / Runtime | Support | Voie d'intégration | Coût estimé |
 |---|---|---|---|
 | **Harness Maxxing** | Partiel | fake CLI via `MAXXING_CLAUDE_BIN`, ou proxy Anthropic (`ANTHROPIC_BASE_URL`) | 1–3 semaines |
 | **OpenClaw** | Oui | plugin `agent harness` natif (`runAttempt`) ou CLI backend (`api.registerCliBackend`) | 1–2 semaines |
+| **DeepSeek Harness (DSH)** | Runtime, `experimental` | plugin DSH (voie secondaire) ou runtime UHB-native (voie principale) | 2–4 semaines |
 | **Hermes** | Partiel | extraction des 8 fonctions depuis le gateway et les profils | 2–3 semaines |
 
-Lecture : « Support » qualifie la capacité du control plane à héberger un backend
-externe **sans être patché**. « Partiel » = une porte existe mais n'est pas un
-contrat d'exécution documenté ; elle peut changer sans préavis.
+Note — DSH est un cas à part : déjà model-agnostic et plugin-based, il n'a pas
+besoin d'être rendu universel. UHB lui fournit le contrat d'interface qui permet à
+n'importe quel control plane de l'utiliser sans apprendre Cordis ni son API.
+
+Lecture : « Support » qualifie la capacité du produit à héberger un backend externe
+**sans être patché**. « Runtime » = le produit exécute, c'est un backend candidat et
+non un hôte ; « Partiel » = une porte existe, sans contrat d'exécution documenté.

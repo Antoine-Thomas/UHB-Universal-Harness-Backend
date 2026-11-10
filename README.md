@@ -29,6 +29,11 @@ faire tourner DeepSeek est une impasse, et UHB ne la propose pas. Ce qui reste �
 et que ce contrat rend explicite — ce sont les voies légitimes : un endpoint HTTP
 compatible, un binaire de CLI substituable, un plugin d'exécution natif.
 
+Certains runtimes, comme DeepSeek Harness, sont déjà model-agnostic et
+plugin-based. Il leur manque pourtant un contrat d'interface standard pour les
+control planes : le UHB comble ce vide pour DSH, OpenClaw, Harness Maxxing et les
+runtimes à venir.
+
 ## 2. La solution
 
 Deux artefacts, et rien d'autre :
