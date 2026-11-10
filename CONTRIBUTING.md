@@ -1,65 +1,66 @@
 # CONTRIBUTING
 
-Deux types de contribution, deux procédures. Aucune des deux n'accepte de code
-dans ce dépôt tant que le contrat n'est pas validé.
+![Status](https://img.shields.io/badge/status-v0.1%20draft-yellow)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
+Two kinds of contribution, two procedures. Neither accepts code in this repository
+until the contract is validated.
 
 ---
 
-## Proposer un adapter
+## Proposing an adapter
 
-1. **Ouvrir une issue** intitulée `Adapter: <nom du control plane>`. Y répondre en
-   trois lignes : quelle interface d'exécution le produit expose réellement, quelle
-   porte est utilisable, ce qui manque.
-2. **Décrire la voie d'intégration** parmi les trois connues :
-   - **natif** — le produit expose une interface d'enregistrement d'exécution
-     (ex. `registerAgentHarness`, `registerCliBackend`) ;
-   - **proxy** — le produit ne sait parler qu'un dialecte (souvent Anthropic
-     `/v1/messages`) et accepte un `base_url` ou une variable d'environnement ;
-   - **fake CLI** — le produit lance un binaire par son nom ou par une variable
-     d'environnement, et consomme sa sortie.
-3. **Fournir un document** `ADAPTERS/<nom>.md` avec : contrat réellement fourni,
-   preuves (chemins de fichiers, docs lues, version), voie retenue, ce que
-   l'adaptateur doit fournir, effort estimé, risque et sa cause.
-4. **Ouvrir la PR avec la doc seule.** Le code vient après validation, dans un
-   dépôt séparé.
+1. **Open an issue** titled `Adapter: <control plane name>`. Answer in three lines:
+   which execution interface the product really exposes, which door is usable,
+   what is missing.
+2. **Describe the integration path**, one of the three known ones:
+   - **native** — the product exposes an execution registration interface
+     (e.g. `registerAgentHarness`, `registerCliBackend`);
+   - **proxy** — the product only speaks one dialect (often Anthropic
+     `/v1/messages`) and accepts a `base_url` or an environment variable;
+   - **fake CLI** — the product launches a binary by name or by environment
+     variable, and consumes its output.
+3. **Provide a document** `ADAPTERS/<name>.md` with: the contract actually
+   provided, the evidence (file paths, docs read, version), the chosen path, what
+   the adapter must supply, estimated effort, risk and its cause.
+4. **Open the PR with the doc alone.** Code comes after validation, in a separate
+   repository.
 
-Une fiche d'adapter sans preuve mesurée n'est pas fusionnée. Une affirmation
-plausible mais non vérifiée se marque `[À VÉRIFIER]` — c'est acceptable et utile ;
-une affirmation inventée ne l'est pas.
+An adapter note without measured evidence is not merged. A plausible but
+unverified claim is marked `[TO VERIFY]` — that is acceptable and useful; an
+invented claim is not.
 
-## Proposer une évolution de la spec
+## Proposing a spec change
 
-1. **Ouvrir une issue** intitulée `Spec: <sujet>`.
-2. **Décrire** le cas d'usage réel qui motive le changement, l'impact sur les huit
-   fonctions pivot, et ce qui casse si on ne le fait pas.
-3. **Ouvrir la PR** avec le diff de `SPEC.md` uniquement. Une évolution qui touche
-   `ARCHITECTURE.md` ou `ADAPTERS.md` dans la même PR doit le justifier
-   explicitement.
+1. **Open an issue** titled `Spec: <topic>`.
+2. **Describe** the real use case that motivates the change, the impact on the
+   eight pivot functions, and what breaks if it is not done.
+3. **Open the PR** with the diff of `SPEC.md` only. A change that touches
+   `ARCHITECTURE.md` or `ADAPTERS.md` in the same PR must justify it explicitly.
 
-Changement cassant = version mineure incrémentée (`v0.1` → `v0.2`) et section
-« Compatibilité » mise à jour.
+A breaking change means a minor version bump (`v0.1` → `v0.2`) and an updated
+"Compatibility" section.
 
-## Règles de fond
+## Ground rules
 
-- **Pas de secret, pas de chemin local.** Aucun token, aucune clé, aucun chemin
-  personnel dans un document. Les exemples de clé sont des **noms** de variables
-  (`DEEPSEEK_API_KEY`), jamais des valeurs.
-- **Pas de nom de fournisseur dans le contrat.** Le contrat parle en intentions et
-  en références de modèle. Un exemple peut citer un fournisseur ; une règle ne le
-  peut pas.
-- **Mesurer avant d'affirmer.** Un comportement de control plane se prouve par un
-  fichier ou une doc à jour. Une page tierce ou un miroir peut être obsolète : le
-  dire quand on s'en écarte.
-- **Une règle par paragraphe.** Un contrat se relit ; une phrase qui contient deux
-  obligations sera mal implémentée.
+- **No secrets, no local paths.** No token, no key, no personal path in a
+  document. Key examples are variable **names** (`DEEPSEEK_API_KEY`), never
+  values.
+- **No vendor name in the contract.** The contract speaks in intents and model
+  references. An example may cite a vendor; a rule may not.
+- **Measure before asserting.** Control plane behaviour is proven by a file or an
+  up-to-date doc. A third-party page or mirror may be stale: say so when you
+  depart from it.
+- **One rule per paragraph.** A contract gets re-read; a sentence carrying two
+  obligations will be implemented wrongly.
 
-## Format des documents
+## Document format
 
-Markdown, français, phrases courtes. **DOIT**, **DEVRAIT**, **PEUT** au sens
-RFC 2119 dans `SPEC.md`. Les blocs de code sont des exemples de contrat
-(TypeScript de préférence), pas une implémentation.
+Markdown, English, short sentences. **MUST**, **SHOULD**, **MAY** in the RFC 2119
+sense inside `SPEC.md`. Code blocks are contract examples (TypeScript by
+preference), not an implementation.
 
-## Licence des contributions
+## Contribution license
 
-MIT, inbound = outbound (voir [LICENSE](LICENSE)). En ouvrant une PR, vous
-acceptez que votre texte soit publié sous cette licence. Aucun CLA n'est demandé.
+MIT, inbound = outbound (see [LICENSE](LICENSE)). By opening a PR you agree that
+your text is published under that license. No CLA is required.

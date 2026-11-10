@@ -1,25 +1,28 @@
 # ARCHITECTURE — UHB
 
-Comment les trois couches s'articulent, ce qui circule entre elles, où l'on
-branche un nouveau composant, et ce qui ne change jamais.
+![Status](https://img.shields.io/badge/status-v0.1%20draft-yellow)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
+How the three layers fit together, what moves between them, where a new component
+plugs in, and what never changes.
 
 ---
 
-## 1. Les trois couches
+## 1. The three layers
 
 ```
 ┌─ CONTROL PLANE ─────────────────────────┐
 │ Harness Maxxing · OpenClaw · Hermes     │
-│ (UI, sessions, crons, mémoire)          │
+│ (UI, sessions, crons, memory)           │
 └────────────────┬────────────────────────┘
-                 │ HTTP (Anthropic ou OpenAI)
+                 │ HTTP (Anthropic or OpenAI)
                  ▼
 ┌─ UHB (Universal Harness Backend) ──────┐
 │ resolve_provider(model_ref)             │
 │ stream() · cancel() · health()          │
-│ Traduction Anthropic ↔ OpenAI           │
+│ Anthropic ↔ OpenAI translation          │
 └────────────────┬────────────────────────┘
-                 │ HTTP (protocole natif)
+                 │ HTTP (native protocol)
                  ▼
 ┌─ RUNTIME ───────────────────────────────┐
 │ DeepSeek v4.1 · Kimi · GLM · Claude     │
@@ -27,189 +30,183 @@ branche un nouveau composant, et ce qui ne change jamais.
 └─────────────────────────────────────────┘
 ```
 
-**Control Plane.** Il possède l'état produit : quelle session, quel projet, quelle
-politique, quel cron, quelle notification. Il décide *quoi* faire et *pour qui*. Il
-ne sait pas quel protocole parle le modèle, et c'est volontaire : c'est ce qui
-permet de changer de modèle sans changer l'UI.
+**Control Plane.** It owns product state: which session, which project, which
+policy, which cron, which notification. It decides *what* to do and *for whom*. It
+does not know which protocol the model speaks, and that is deliberate: that is what
+lets you change models without changing the UI.
 
-**UHB.** Il possède la traduction : une intention de modèle devient une référence,
-une référence devient un endpoint et un protocole, une requête dans un dialecte
-devient une requête dans un autre, un flux propriétaire devient un flux normalisé.
-Il possède aussi le cycle de vie de la tâche : `queued`, `working`, `streaming`,
-`done`, `failed`, `cancelled` (voir [SPEC.md](SPEC.md) §5).
+**UHB.** It owns translation: a model intent becomes a reference, a reference
+becomes an endpoint and a protocol, a request in one dialect becomes a request in
+another, a proprietary stream becomes a normalised stream. It also owns the task
+lifecycle: `queued`, `working`, `streaming`, `done`, `failed`, `cancelled` (see
+[SPEC.md](SPEC.md) §5).
 
-**Runtime.** Il possède l'exécution : la boucle du modèle, les appels d'outils, le
-contexte, la compaction, les caches de préfixe. Il ne connaît ni sessions produit
-ni UI. Un runtime qui expose `/v1/chat/completions` peut déjà être branché ; un
-runtime qui expose `/v1/messages` aussi.
+**Runtime.** It owns execution: the model loop, tool calls, context, compaction,
+prefix caches. It knows nothing of product sessions or UI. A runtime that exposes
+`/v1/chat/completions` can already be plugged in; so can one that exposes
+`/v1/messages`.
 
-**Pourquoi trois couches et pas deux.** Fusionner UHB et le runtime rend le
-runtime responsable du routage : chaque nouveau modèle obligerait à redéployer le
-runtime. Fusionner UHB et le control plane rend le control plane responsable du
-protocole : chaque nouveau modèle obligerait à redéployer le produit. La couche
-mince au milieu est celle qui bouge le plus souvent, et c'est exactement celle
-qu'on veut pouvoir remplacer sans rien casser.
-
----
-
-## 2. Le flux d'une requête
-
-De l'UI jusqu'au modèle, en six étapes. Exemple : l'utilisateur tape un message
-dans une session dont le modèle est `deepseek/deepseek-v4.1-flash`.
-
-1. **Le control plane assemble le tour.** Il choisit la session, le projet, le
-   prompt système, la politique d'outils et la mémoire. Il produit un
-   `TaskContext` et un prompt utilisateur. Rien n'est encore parti sur le réseau.
-2. **Le control plane appelle le backend.** Selon son interface réelle, il appelle
-   `execute_task` (plugin natif), ou envoie `POST /v1/messages` à un proxy local
-   (fake CLI / endpoint compatible). C'est la seule différence entre les deux
-   voies : le contrat est le même.
-3. **UHB résout le modèle.** `route_model` si le control plane n'a pas imposé de
-   référence, puis `resolve_provider` : protocole, `base_url`, `api_key_env`,
-   `model_id`. La clé est lue dans l'environnement au dernier moment, jamais
-   transportée par le contrat.
-4. **UHB traduit la requête.** Si le control plane parle Anthropic et le runtime
-   OpenAI, blocs `tool_use`/`tool_result` deviennent `tool_calls` et messages
-   `role: "tool"` ; `system` devient un message système ; `input_schema` devient
-   `parameters`. Si le control plane parle déjà le bon dialecte, l'étape est un
-   passe-plat.
-5. **Le runtime exécute et streame.** Il émet son flux natif (SSE OpenAI, SSE
-   Anthropic, JSONL de CLI). Chaque delta de texte, de raisonnement, d'appel
-   d'outil et de résultat est un événement.
-6. **UHB retraduit et normalise.** Chaque delta devient un `StreamEvent` typé,
-   poussé par `stream()` dans l'ordre d'arrivée. Le control plane affiche : tokens
-   qui s'écrivent, cartes d'outils, diffs. À la fin, `end` ferme la tâche et fige
-   son état.
-
-Deux chemins sont légitimes et produisent le même résultat observable :
-
-- **Chemin plugin** — le control plane expose une interface d'exécution (OpenClaw
-  `registerAgentHarness` / `registerCliBackend`). L'adapter s'y enregistre et les
-  huit fonctions sont appelées directement.
-- **Chemin proxy** — le control plane ne sait parler qu'à Claude. UHB écoute en
-  HTTP sur `127.0.0.1:PORT` et imite `/v1/messages`. Aucune ligne du control plane
-  n'est modifiée ; c'est le chemin de Harness Maxxing et de tout produit qui lance
-  `claude` en dur.
+**Why three layers and not two.** Merging UHB into the runtime makes the runtime
+responsible for routing: every new model would force a runtime redeploy. Merging
+UHB into the control plane makes the control plane responsible for protocol: every
+new model would force a product redeploy. The thin middle layer is the one that
+changes most often, and it is exactly the one we want to be able to swap without
+breaking anything.
 
 ---
 
-## 3. Les points d'extension
+## 2. The request flow
 
-Trois axes d'extension, indépendants. On peut en ajouter un sans toucher aux
-autres.
+From the UI down to the model, in six steps. Example: the user types a message in
+a session whose model is `deepseek/deepseek-v4.1-flash`.
 
-### 3.1 Ajouter un control plane
+1. **The control plane assembles the turn.** It picks the session, the project, the
+   system prompt, the tool policy and the memory. It produces a `TaskContext` and a
+   user prompt. Nothing has hit the network yet.
+2. **The control plane calls the backend.** Depending on its real interface it
+   calls `execute_task` (native plugin), or sends `POST /v1/messages` to a local
+   proxy (fake CLI / compatible endpoint). That is the only difference between the
+   two paths: the contract is the same.
+3. **UHB resolves the model.** `route_model` if the control plane did not impose a
+   reference, then `resolve_provider`: protocol, `base_url`, `api_key_env`,
+   `model_id`. The key is read from the environment at the last moment and never
+   carried by the contract.
+4. **UHB translates the request.** If the control plane speaks Anthropic and the
+   runtime speaks OpenAI, `tool_use`/`tool_result` blocks become `tool_calls` and
+   `role: "tool"` messages; `system` becomes a system message; `input_schema`
+   becomes `parameters`. If the control plane already speaks the right dialect,
+   this step is a pass-through.
+5. **The runtime executes and streams.** It emits its native flow (OpenAI SSE,
+   Anthropic SSE, CLI JSONL). Every delta of text, reasoning, tool call and result
+   is an event.
+6. **UHB translates back and normalises.** Each delta becomes a typed
+   `StreamEvent`, pushed by `stream()` in arrival order. The control plane renders
+   it: tokens being written, tool cards, diffs. At the end, `end` closes the task
+   and freezes its state.
 
-1. Écrire `ADAPTERS/<nom>.md` : interface réelle, voie d'intégration, effort,
-   risque.
-2. Choisir la voie : natif (plugin), proxy (endpoint compatible), ou CLI
-   substituable.
-3. Implémenter les huit fonctions dans le dialecte du control plane. Une fonction
-   non supportée rend `unsupported`, jamais un faux succès.
-4. Prouver un tour complet : un prompt, un appel d'outil, un diff, un `cancel`.
+Two paths are legitimate and produce the same observable result:
 
-Ce qui ne change pas : ni le contrat, ni les protocoles, ni la machine à états.
-
-### 3.2 Ajouter un runtime
-
-1. Vérifier le protocole réel : `/v1/messages`, `/v1/chat/completions`, ou un
-   dialecte maison.
-2. Ajouter une entrée dans la table de résolution : `model_ref` → protocole,
-   `base_url`, `api_key_env`, `model_id`.
-3. Déclarer les capacités réelles : outils ? streaming incrémental ? raisonnement
-   séparé ? vision ? contexte maximum ?
-4. Vérifier `health()` sans inférence : un `GET /health` ou `GET /v1/models`.
-
-Ce qui ne change pas : le contrat reste les huit fonctions ; un runtime n'a jamais
-à connaître le control plane.
-
-### 3.3 Ajouter un protocole
-
-1. Documenter le schéma requête/réponse dans [SPEC.md](SPEC.md) §3, avec les
-   champs obligatoires et optionnels.
-2. Fournir les deux traductions : vers OpenAI (le pivot), et depuis Anthropic (le
-   dialecte d'entrée le plus répandu).
-3. Définir le mapping des raisons de fin et des identifiants d'outils.
-4. Documenter ce qui est perdu : un protocole qui ne porte pas le raisonnement
-   séparé ne doit pas le faire passer pour du texte.
-
-Ce qui ne change pas : le pivot reste OpenAI `/v1/chat/completions`, parce que
-c'est ce que la majorité des providers implémentent.
+- **Plugin path** — the control plane exposes an execution interface (OpenClaw
+  `registerAgentHarness` / `registerCliBackend`). The adapter registers there and
+  the eight functions are called directly.
+- **Proxy path** — the control plane only knows how to talk to Claude. UHB listens
+  on HTTP at `127.0.0.1:PORT` and imitates `/v1/messages`. Not a line of the
+  control plane is modified; this is the Harness Maxxing path, and the path of any
+  product that hardcodes `claude`.
 
 ---
 
-## 4. Les invariants
+## 3. Extension points
 
-Ce qui reste vrai quel que soit l'adapter, le runtime ou le protocole. Un
-composant qui viole un invariant n'est pas conforme, même s'il « marche ».
+Three axes, independent. One can be added without touching the others.
 
-1. **Aucun secret dans le contrat.** `resolve_provider` rend un **nom** de
-   variable d'environnement, jamais une valeur. Le contrat ne transporte ni clé,
-   ni token, ni cookie.
-2. **Aucune inférence hors d'`execute_task`.** `health`, `route_model`,
-   `cancel`, `load_skill`, `resolve_provider` sont sans tokens. Un modèle ne doit
-   pas être facturé pour avoir répondu « je vais bien ».
-3. **Un flux ordonné, un seul `end`.** `start` d'abord, `end` en dernier, jamais
-   d'événement après. Un flux interrompu sans `end` est une erreur de contrat, pas
-   une fin normale.
-4. **La tâche est l'unité d'annulation.** `cancel(task_id)` ne tue pas un
-   processus arbitraire : il demande l'arrêt de la tâche nommée, coopérativement,
-   et l'état final est `cancelled`.
-5. **Le protocole du control plane ne change pas.** Un control plane qui parle
-   Anthropic continue de parler Anthropic. C'est UHB qui s'adapte, jamais le
-   produit hôte.
-6. **UHB ne détient aucun état produit.** Pas de session, pas de cron, pas de
-   mémoire produit, pas de notification. Il peut tenir un état de tâche en mémoire
-   pour l'annulation et l'idempotence, et rien de plus.
-7. **L'échec est explicite.** Une fonction non supportée rend `unsupported`. Un
-   modèle non résolvable rend `unknown_model_ref`. Un flux invalide rend une
-   erreur. Le silence et le faux succès sont interdits.
-8. **La mémoire est négociée, pas imposée.** `sync_memory` écrit au niveau demandé
-   et rapporte les conflits ; il ne réorganise jamais la mémoire d'un autre
-   niveau.
+### 3.1 Adding a control plane
+
+1. Write `ADAPTERS/<name>.md`: real interface, integration path, effort, risk.
+2. Pick the path: native (plugin), proxy (compatible endpoint), or replaceable CLI.
+3. Implement the eight functions in the control plane's dialect. An unsupported
+   function returns `unsupported`, never a fake success.
+4. Prove one complete turn: a prompt, a tool call, a diff, a `cancel`.
+
+What does not change: neither the contract, nor the protocols, nor the state
+machine.
+
+### 3.2 Adding a runtime
+
+1. Check the real protocol: `/v1/messages`, `/v1/chat/completions`, or a bespoke
+   dialect.
+2. Add an entry to the resolution table: `model_ref` → protocol, `base_url`,
+   `api_key_env`, `model_id`.
+3. Declare the real capabilities: tools? incremental streaming? separate
+   reasoning? vision? maximum context?
+4. Verify `health()` without inference: a `GET /health` or `GET /v1/models`.
+
+What does not change: the contract stays the eight functions; a runtime never needs
+to know the control plane.
+
+### 3.3 Adding a protocol
+
+1. Document the request/response schema in [SPEC.md](SPEC.md) §3, with required and
+   optional fields.
+2. Provide both translations: toward OpenAI (the pivot), and from Anthropic (the
+   most common inbound dialect).
+3. Define the finish-reason and tool-identifier mapping.
+4. Document what is lost: a protocol that does not carry separate reasoning must not
+   present it as text.
+
+What does not change: the pivot stays OpenAI `/v1/chat/completions`, because that is
+what most providers implement.
 
 ---
 
-## 5. Déploiement typique
+## 4. Invariants
+
+What stays true whatever the adapter, runtime or protocol. A component that breaks
+an invariant is not conformant, even if it "works".
+
+1. **No secret in the contract.** `resolve_provider` returns an environment
+   variable **name**, never a value. The contract carries no key, token or cookie.
+2. **No inference outside `execute_task`.** `health`, `route_model`, `cancel`,
+   `load_skill`, `resolve_provider` spend no tokens. A model must not be billed for
+   answering "I am fine".
+3. **One ordered stream, one `end`.** `start` first, `end` last, never an event
+   after. A stream cut without `end` is a contract error, not a normal finish.
+4. **The task is the unit of cancellation.** `cancel(task_id)` does not kill an
+   arbitrary process: it asks the named task to stop, cooperatively, and the final
+   state is `cancelled`.
+5. **The control plane's protocol does not change.** A control plane that speaks
+   Anthropic keeps speaking Anthropic. UHB adapts, never the host product.
+6. **UHB holds no product state.** No session, no cron, no product memory, no
+   notification. It may hold task state in memory for cancellation and idempotency,
+   and nothing more.
+7. **Failure is explicit.** An unsupported function returns `unsupported`. An
+   unresolvable model returns `unknown_model_ref`. An invalid stream returns an
+   error. Silence and fake success are forbidden.
+8. **Memory is negotiated, not imposed.** `sync_memory` writes at the requested
+   level and reports conflicts; it never reorganises another level's memory.
+
+---
+
+## 5. Typical deployment
 
 ```
-poste de travail / serveur
-├── control plane (UI web, port 3000)
+workstation / server
+├── control plane (web UI, port 3000)
 ├── UHB proxy (127.0.0.1:8101, Anthropic-compatible)
 └── runtime
-    ├── distant  → https://api.deepseek.com/v1     (clé dans l'env)
-    └── local    → http://127.0.0.1:8000/v1        (moteur auto-hébergé)
+    ├── remote  → https://api.deepseek.com/v1     (key in the env)
+    └── local   → http://127.0.0.1:8000/v1        (self-hosted engine)
 ```
 
-Trois points d'attention, tirés de l'état de l'art mesuré :
+Three points of attention, drawn from the measured state of the art:
 
-- **Écouter en boucle locale uniquement.** Un proxy qui traduit Anthropic ↔ OpenAI
-  expose une surface d'exécution ; `0.0.0.0` par défaut est une faute.
-- **Synchroniser la fenêtre de contexte déclarée.** Si le control plane croit à
-  200K et que le runtime en accepte 128K, la compaction se déclenche trop tard et
-  tous les tours échouent (cas réel documenté côté DeepSeek V4.1).
-- **Un cache de préfixe change tout en usage agentique.** Chaque tour d'outil
-  renvoie tout l'historique : sans réutilisation de préfixe, le coût et la latence
-  explosent au 20e tour. Le contrat n'impose rien, mais un backend DEVRAIT exposer
-  la capacité si le runtime l'a.
+- **Listen on loopback only.** A proxy that translates Anthropic ↔ OpenAI exposes
+  an execution surface; defaulting to `0.0.0.0` is a mistake.
+- **Keep the declared context window in sync.** If the control plane believes in
+  200K and the runtime accepts 128K, compaction fires too late and every turn
+  fails (a real case documented on the DeepSeek V4.1 side).
+- **A prefix cache changes everything in agentic use.** Every tool turn resends the
+  whole history: without prefix reuse, cost and latency explode by the 20th turn.
+  The contract imposes nothing, but a backend SHOULD expose the capability when the
+  runtime has it.
 
 ---
 
-## 6. Quand ça casse
+## 6. When it breaks
 
-Trois pannes reviennent dans tous les projets de ce type ; les nommer ici évite de
-les redécouvrir.
+Three failures recur in every project of this kind; naming them here saves
+rediscovering them.
 
-- **Un flux sans `end`.** Le control plane voit des tokens, puis plus rien : l'UI
-  reste « en cours » indéfiniment. Le backend DOIT fermer la tâche (`failed` ou
-  `cancelled`) même quand le runtime meurt sans le dire.
-- **Un `tool_result` orphelin.** L'identifiant d'appel a changé au passage d'un
-  protocole ; le runtime ne reconnaît plus son propre résultat et reboucle. La
-  traduction DOIT conserver l'identifiant, jamais le régénérer.
-- **Une fenêtre de contexte déclarée fausse.** Le control plane croit à 200K, le
-  runtime accepte 128K : les derniers tours échouent et la compaction se déclenche
-  trop tard. La valeur publiée par `health()` DOIT être la valeur réelle du runtime.
+- **A stream with no `end`.** The control plane sees tokens, then nothing: the UI
+  stays "running" forever. The backend MUST close the task (`failed` or
+  `cancelled`) even when the runtime dies without saying so.
+- **An orphaned `tool_result`.** The call identifier changed while crossing a
+  protocol; the runtime no longer recognises its own result and loops. Translation
+  MUST preserve the identifier, never regenerate it.
+- **A wrong declared context window.** The control plane believes in 200K, the
+  runtime accepts 128K: the last turns all fail and compaction fires too late. The
+  value published by `health()` MUST be the runtime's real value.
 
-Dans les trois cas, la règle est la même : rendre la panne visible — un événement
-`error`, un état terminal, une valeur mesurée — plutôt que de la laisser se traduire
-en silence en comportement bizarre.
+In all three cases the rule is the same: make the failure visible — an `error`
+event, a terminal state, a measured value — rather than letting it turn silently
+into strange behaviour.

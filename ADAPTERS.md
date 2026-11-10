@@ -1,28 +1,33 @@
-# ADAPTERS — contrat par control plane
+# ADAPTERS — contract per control plane
 
-Un adapter par control plane connu : ce que le produit offre réellement, par quelle
-porte un backend externe entre, ce que l'adapter doit fournir, l'effort et le
-risque.
+![Status](https://img.shields.io/badge/status-v0.1%20draft-yellow)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-Chaque fiche cite les preuves mesurées en Phase 0 (fichiers et docs lus dans les dépôts publics) ; une affirmation sans preuve est marquée **[À VÉRIFIER]**.
+One note per known control plane: what the product really offers, through which
+door an external backend enters, what the adapter must supply, the effort and the
+risk.
+
+Each note cites the evidence measured in Phase 0 (files and docs read in the public
+repositories); a claim without evidence is marked **[TO VERIFY]**.
 
 ---
 
 ## 1. Harness Maxxing
 
-**Dépôt** — https://github.com/makushingu/harness-maxxing (Fair Source,
-source-available, **pas** OSI).
+**Repository** — https://github.com/makushingu/harness-maxxing (Fair Source,
+source-available, **not** OSI).
 
-### Contrat fourni
+### Contract provided
 
-**Aucun contrat d'exécution natif.** L'API HTTP documentée (`docs/dev/API.md`,
-v2.0) est une API de *control plane* : `/api/sessions`, `/api/sessions/{id}/stream`,
-`/api/crons`, `/api/skills`, `/api/claude/settings`. Aucun endpoint ne déclare un
-backend d'exécution, et le produit exige un abonnement Claude ou une clé Anthropic.
+**No native execution contract.** The documented HTTP API (`docs/dev/API.md`,
+v2.0) is a *control plane* API: `/api/sessions`, `/api/sessions/{id}/stream`,
+`/api/crons`, `/api/skills`, `/api/claude/settings`. No endpoint declares an
+execution backend, and the product requires a Claude subscription or an Anthropic
+key.
 
-### Voie d'intégration
+### Integration path
 
-**a) Fake CLI — la porte solide.** `server/maxxing/sessions/spawn.py` :
+**a) Fake CLI — the solid door.** `server/maxxing/sessions/spawn.py`:
 
 ```python
 def claude_bin() -> str:
@@ -32,208 +37,208 @@ def claude_bin() -> str:
     return shutil.which("claude", path=base_env()["PATH"]) or "claude"
 ```
 
-`MAXXING_CLAUDE_BIN` est documenté (`docs/dev/INTERNALS.md`, `CONTRIBUTING.md`) et
-utilisé par la suite de tests du produit (`server/tests/fake_claude.py`, 541
-lignes). Contrat de substitution :
+`MAXXING_CLAUDE_BIN` is documented (`docs/dev/INTERNALS.md`, `CONTRIBUTING.md`) and
+used by the product's own test suite (`server/tests/fake_claude.py`, 541 lines).
+Substitution contract:
 
-- **argv** : `-p --output-format stream-json --verbose`, puis `--model <id>`,
-  `--permission-mode <mode>`, `--mcp-config <fichier> --permission-prompt-tool
-  <outil>`, et `--session-id <csid>` (fil neuf) ou `--resume <csid>`.
-- **entrée** : `--input-format stream-json` ; le prompt arrive sur stdin en message
-  utilisateur JSONL, stdin laissé ouvert (permet un *steer* en cours de tour).
-- **sortie** : JSONL sur stdout, `type` ∈ `assistant`, `user`, `result`, `system`
+- **argv**: `-p --output-format stream-json --verbose`, then `--model <id>`,
+  `--permission-mode <mode>`, `--mcp-config <file> --permission-prompt-tool <tool>`,
+  and `--session-id <csid>` (fresh thread) or `--resume <csid>`.
+- **input**: `--input-format stream-json`; the prompt arrives on stdin as a JSONL
+  user message, stdin left open (this is what allows a *steer* mid-turn).
+- **output**: JSONL on stdout, `type` ∈ `assistant`, `user`, `result`, `system`
   (`subtype: init|task_started|…`), `stream_event`, `control_response`.
-- **contrôle** : `{"type":"control_request","request":{"subtype":"interrupt"}}` sur
-  stdin interrompt le tour.
-- **filtrage** : les lignes à `parent_tool_use_id` non vide (sous-agents) sont
-  écartées de la normalisation (`server/maxxing/sessions/normalize.py`).
-- **sessions** : `stream-json` de Claude Code, relu par SSE interne
+- **control**: `{"type":"control_request","request":{"subtype":"interrupt"}}` on
+  stdin interrupts the turn.
+- **filtering**: lines with a non-empty `parent_tool_use_id` (sub-agents) are
+  dropped from normalisation (`server/maxxing/sessions/normalize.py`).
+- **sessions**: Claude Code `stream-json`, re-read by the internal SSE
   `GET /api/sessions/{id}/stream?from=` (`event: events|state|reset`).
 
-**b) Proxy Anthropic.** Le produit lance le CLI officiel, qui respecte
-`ANTHROPIC_BASE_URL`. `base_env()` copie `os.environ`, donc une variable posée dans
-l'unité systemd du serveur atteint le processus `claude`. Réserve : cette variable
-est dans `_RESERVED` — un secret de vault marqué `expose` ne peut pas la poser, et
-la doc utilisateur ne présente pas cette voie comme un hook. **[hypothèse]** elle
-fonctionne, mais elle n'est pas un contrat.
+**b) Anthropic proxy.** The product launches the official CLI, which honours
+`ANTHROPIC_BASE_URL`. `base_env()` copies `os.environ`, so a variable set in the
+server's systemd unit reaches the `claude` process. Caveat: that variable sits in
+`_RESERVED` — a vault secret flagged `expose` cannot set it, and the user docs do
+not present this path as a hook. **[hypothesis]** it works, but it is not a
+contract.
 
-### Ce que l'adaptateur doit fournir
+### What the adapter must supply
 
-Un binaire qui parle le contrat ci-dessus (`execute_task` ≈ une invocation par tour,
-`cancel` ≈ `control_request interrupt`, `health` ≈ sortie immédiate sans appel
-modèle), ou un endpoint Anthropic-compatible sur `127.0.0.1:PORT` avec
-`ANTHROPIC_BASE_URL` posé dans l'environnement du service.
+A binary that speaks the contract above (`execute_task` ≈ one invocation per turn,
+`cancel` ≈ `control_request interrupt`, `health` ≈ immediate exit with no model
+call), or an Anthropic-compatible endpoint on `127.0.0.1:PORT` with
+`ANTHROPIC_BASE_URL` set in the service environment.
 
-### Effort — 1 à 3 semaines
+### Effort — 1 to 3 weeks
 
-Le fake CLI est le chemin court : le format est déjà celui de Claude Code, donc un
-adapter qui émet du `stream-json` valide fonctionne en quelques jours ; le reste est
-sessions, MCP et streaming d'outils.
+The fake CLI is the short path: the format is already Claude Code's, so an adapter
+that emits valid `stream-json` works within days; the rest is session handling, MCP
+and tool streaming.
 
-### Risque — élevé
+### Risk — high
 
-Interface non contractuelle : les flags sont construits dans `runner.py`, pas dans
-une doc d'extension, et changent avec les versions (notes par build,
-`docs/upgrade/2.0.0a1xx.md`). Licence Fair Source : redistribuer un fork modifié
-est permis, l'utiliser dans une offre payante ne l'est pas sans accord. Un adapter
-branché par variable d'environnement ne copie aucun code du produit.
+Non-contractual interface: the flags are built inside `runner.py`, not in an
+extension doc, and change across versions (per-build release notes,
+`docs/upgrade/2.0.0a1xx.md`). Fair Source license: redistributing a modified fork is
+allowed, using it inside a paid offer is not, without agreement. An adapter wired
+through an environment variable copies none of the product's code.
 
-**Verdict — un backend externe peut-il s'y plugger sans patcher le code ?**
-**Partiellement.** Oui par `MAXXING_CLAUDE_BIN` ou `ANTHROPIC_BASE_URL`, non par un
-contrat d'exécution documenté.
+**Verdict — can an external backend plug in without patching the code?**
+**Partially.** Yes through `MAXXING_CLAUDE_BIN` or `ANTHROPIC_BASE_URL`, no through
+a documented execution contract.
 
 ---
 
 ## 2. OpenClaw
 
-**Dépôt** — https://github.com/openclaw/openclaw (MIT, OpenClaw Foundation).
+**Repository** — https://github.com/openclaw/openclaw (MIT, OpenClaw Foundation).
 
-### Contrat fourni
+### Contract provided
 
-Deux surfaces d'exécution documentées et distinctes.
+Two documented and distinct execution surfaces.
 
 **a) Agent harness plugin** — `docs/plugins/sdk-agent-harness*` (9 pages). Import
-`openclaw/plugin-sdk/agent-harness`. Forme obligatoire :
+`openclaw/plugin-sdk/agent-harness`. Required shape:
 
 ```ts
 const harness: AgentHarnessV2 = {
   id: "my-harness",
   label: "My native agent harness",
-  supports(ctx) { /* { supported, priority } ou { supported:false, reason } */ },
-  async runAttempt(params) { /* exécute le tour préparé */ },
+  supports(ctx) { /* { supported, priority } or { supported:false, reason } */ },
+  async runAttempt(params) { /* runs the prepared turn */ },
 };
 api.registerAgentHarness(harness);
 ```
 
-- **Obligatoire** : `id`, `label`, `supports`, `runAttempt`.
-- **Optionnel** : `runIsolatedCompletionV2`, `delegatedExecutionPluginIds`,
+- **Required**: `id`, `label`, `supports`, `runAttempt`.
+- **Optional**: `runIsolatedCompletionV2`, `delegatedExecutionPluginIds`,
   `authBootstrap: "harness"`, `workspaceEnvironment`.
-- **Le core prépare** : provider et modèle, auth, budget de contexte, transcript,
-  workspace, politique d'outils, callbacks. Le harness reçoit `params.prompt`,
+- **Core prepares**: provider and model, auth, context budget, transcript,
+  workspace, tool policy, callbacks. The harness receives `params.prompt`,
   `params.tools`, `params.images`, `params.onPartialReply`, `params.onAgentEvent`.
-- **Exemples réels** : `extensions/muse/index.ts`, `extensions/copilot/index.ts`,
-  `extensions/acpx/index.ts`, `extensions/codex/index.ts` — tous appellent
+- **Real examples**: `extensions/muse/index.ts`, `extensions/copilot/index.ts`,
+  `extensions/acpx/index.ts`, `extensions/codex/index.ts` — all call
   `api.registerAgentHarness(...)`.
 
-**b) CLI backend plugin** — `docs/plugins/cli-backend-plugins.md` et
-`docs/gateway/cli-backends.md` : `api.registerCliBackend({ id, modelProvider,
-liveTest, config })`, où `config` porte `command`, `args`, `resumeArgs` (`{prompt}`,
-`{sessionId}`), `output`/`resumeOutput` (`json`, `jsonl`, `text`), `jsonlDialect`
-(`claude-stream-json`, `gemini-stream-json`), `input` (`arg`/`stdin`), `sessionArgs`,
-`sessionMode`, `modelArg`, `modelAliases`, `env`/`clearEnv`, `imageArg`,
-`bundleMcp`/`bundleMcpMode`, `nativeToolMode`, `liveSession`.
+**b) CLI backend plugin** — `docs/plugins/cli-backend-plugins.md` and
+`docs/gateway/cli-backends.md`: `api.registerCliBackend({ id, modelProvider,
+liveTest, config })`, where `config` carries `command`, `args`, `resumeArgs`
+(`{prompt}`, `{sessionId}`), `output`/`resumeOutput` (`json`, `jsonl`, `text`),
+`jsonlDialect` (`claude-stream-json`, `gemini-stream-json`), `input`
+(`arg`/`stdin`), `sessionArgs`, `sessionMode`, `modelArg`, `modelAliases`,
+`env`/`clearEnv`, `imageArg`, `bundleMcp`/`bundleMcpMode`, `nativeToolMode`,
+`liveSession`.
 
-### Le mode text-only est-il la seule option ?
+### Is text-only the only mode?
 
-**Non.** La page tierce `docs.openclaw.kr/gateway/cli-backends` décrit les CLI
-backends comme un filet « text in / text out, tools disabled, no streaming,
-fallback only ». La documentation du dépôt amont, à jour, dit l'inverse sur les
-trois points :
+**No.** The third-party page `docs.openclaw.kr/gateway/cli-backends` describes CLI
+backends as a net: "text in / text out, tools disabled, no streaming, fallback
+only". The upstream repository documentation, which is current, says the opposite
+on all three points:
 
-- « A CLI backend can be an agent's **primary runtime** or a fallback. »
-- « **JSONL streaming** for CLIs that support it. »
-- outils disponibles via `bundleMcp: true` et le pont MCP en boucle locale (les
-  appels d'outils ne sont pas injectés dans le protocole du CLI, le CLI voit les
-  outils du Gateway par MCP).
+- "A CLI backend can be an agent's **primary runtime** or a fallback."
+- "**JSONL streaming** for CLIs that support it."
+- tools available through `bundleMcp: true` and the loopback MCP bridge (tool calls
+  are not injected into the CLI protocol; the CLI sees the Gateway tools over MCP).
 
-Le miroir coréen est **obsolète** : utile pour décrire le comportement conservateur
-par défaut, pas l'état de l'art.
+The Korean mirror is **stale**: useful for describing the conservative default
+behaviour, not the state of the art.
 
-### Ce que l'adaptateur doit fournir
+### What the adapter must supply
 
-Un plugin qui déclare `cliBackends` dans `openclaw.plugin.json`, appelle
-`api.registerCliBackend(...)` (chemin court : `command` = binaire UHB, `output:
+A plugin that declares `cliBackends` in `openclaw.plugin.json`, calls
+`api.registerCliBackend(...)` (short path: `command` = the UHB binary, `output:
 "jsonl"`, `jsonlDialect: "claude-stream-json"`, `sessionArgs` + `sessionMode:
-"existing"`), et pour le chemin natif un `AgentHarnessV2` dont `runAttempt`
-implémente `execute_task`.
+"existing"`), and for the native path an `AgentHarnessV2` whose `runAttempt`
+implements `execute_task`.
 
-### Effort — 1 à 2 semaines
+### Effort — 1 to 2 weeks
 
-Contrat documenté, versionné et illustré par quatre implémentations du dépôt ; le travail réel est le flux d'événements et la politique d'outils.
+Documented, versioned contract, illustrated by four implementations in the
+repository; the real work is the event-flow translation and the tool policy.
 
-### Risque — moyen
+### Risk — medium
 
-`AgentHarnessV2` est explicitement **expérimental** : « the contract is still
-experimental because the parameter types intentionally mirror the current embedded
-runner », et l'installation de harness tiers l'est aussi. Le chemin CLI backend est
-plus stable (config déclarative) mais moins riche.
+`AgentHarnessV2` is explicitly **experimental**: "the contract is still experimental
+because the parameter types intentionally mirror the current embedded runner", and
+so is third-party harness installation. The CLI backend path is more stable
+(declarative config) but less capable.
 
-**Verdict — primary path possible, pas juste fallback ?** **Oui.** Documenté pour
-les CLI backends ; expérimental mais supporté pour les agent harness.
+**Verdict — primary path possible, not just fallback?** **Yes.** Documented for CLI
+backends; experimental but supported for agent harnesses.
 
 ---
 
 ## 3. DeepSeek Harness (DSH)
 
-**Nature — runtime d'exécution, pas un control plane.** DSH détient l'agent loop, le
-sandbox, les outils et le journal de session ; il ne possède ni UI produit, ni crons,
-ni notifications. C'est le seul produit de cette liste déjà model-agnostic **et**
-plugin-based : « tout est plugin » via Cordis, avec DeepSeek, OpenAI, Anthropic et des
-endpoints personnalisés en natif. Il n'a donc pas besoin d'être rendu universel — il a
-besoin d'un contrat pour être utilisable depuis un control plane.
+**Nature — an execution runtime, not a control plane.** DSH owns the agent loop,
+the sandbox, the tools and the session log; it owns no product UI, no crons and no
+notifications. It is the only product in this list that is already model-agnostic
+**and** plugin-based: "everything is a plugin" through Cordis, with DeepSeek,
+OpenAI, Anthropic and custom endpoints supported natively. It therefore does not
+need to be made universal — it needs a contract to be usable from a control plane.
 
-### Contrat fourni
+### Contract provided
 
-Plugin Cordis natif. Journal de session append-only, replayable et forkable. Agent
-loop remplaçable via un waterfall `pre-step` / `request` / `request-error`. Sandbox,
-outils et plugins sont des composants Cordis. Statut : **developer preview**, breaking
-changes annoncés.
+Native Cordis plugin. Append-only session log, replayable and forkable. Replaceable
+agent loop through a `pre-step` / `request` / `request-error` waterfall. Sandbox,
+tools and plugins are all Cordis components. Status: **developer preview**, breaking
+changes announced.
 
-### Voie d'intégration
+### Integration path
 
-**Voie principale** — DSH runtime derrière un control plane UHB-native : le control
-plane parle les 8 fonctions, l'UHB route vers DSH, DSH exécute (sandbox, outils,
-journal) et appelle le modèle via son propre model adapter. Aucun protocole de modèle
-n'est traduit dans cette voie : UHB transporte des tâches et des événements.
+**Primary path** — DSH as the runtime behind a UHB-native control plane: the control
+plane speaks the 8 functions, UHB routes to DSH, DSH executes (sandbox, tools,
+session log) and calls the model through its own model adapter. No model protocol is
+translated on this path: UHB carries tasks and events.
 
-**Voie secondaire** — un plugin DSH exposant les 8 fonctions aux control planes
-existants (Harness Maxxing, OpenClaw) : `execute_task` sur l'agent loop, `cancel` sur
-le waterfall, `stream` sur le journal append-only (replay et fork deviennent des
-capacités du backend), `health` sans inférence.
+**Secondary path** — a DSH plugin exposing the 8 functions to existing control
+planes (Harness Maxxing, OpenClaw): `execute_task` over the agent loop, `cancel` over
+the waterfall, `stream` over the append-only session log (replay and fork become
+backend capabilities), `health` without inference.
 
-### Effort et risque
+### Effort and risk
 
-Effort : 2 à 4 semaines pour la voie secondaire ; la voie principale dépend d'un
-control plane UHB-native aujourd'hui inexistant, donc non chiffrable isolément.
-Risque moyen à élevé : developer preview, breaking changes annoncés, le contrat peut
-bouger sans préavis. DSH est donc marqué **`supported, experimental`** (SPEC.md §6),
-et un adapter DSH se teste contre une version épinglée, jamais contre `main`.
+Effort: 2 to 4 weeks for the secondary path; the primary path depends on a
+UHB-native control plane that does not exist yet, so it cannot be estimated in
+isolation. Risk medium to high: developer preview, breaking changes announced, the
+contract can move without notice. DSH is therefore marked **`supported,
+experimental`** (SPEC.md §6), and a DSH adapter is tested against a pinned version,
+never against `main`.
 
 ---
 
 ## 4. Hermes
 
-**Contrat fourni** — aucun contrat d'exécution externe documenté à ce jour. Hermes
-est un runtime d'agent complet (gateway, profils, skills, mémoire, plugins), pas un
-control plane au sens de ce document. **[À VÉRIFIER]** : existence d'une surface
-d'enregistrement de harness/backend dans le gateway.
+**Contract provided** — no external execution contract documented to date. Hermes is
+a full agent runtime (gateway, profiles, skills, memory, plugins), not a control
+plane in this document's sense. **[TO VERIFY]**: whether the gateway exposes a
+harness/backend registration surface.
 
-**Voie d'intégration** — extraction des huit fonctions depuis l'existant :
-configuration des providers (routage et résolution de clés), bibliothèque de skills
-(chargement), fichiers de mémoire par profil (synchronisation), boucle d'exécution
-du gateway (tâche, flux, annulation). L'adapter expose ensuite ces fonctions comme
-un backend UHB.
+**Integration path** — extraction of the eight functions from the existing pieces:
+provider configuration (routing and key resolution), skill library (loading),
+per-profile memory files (synchronisation), gateway execution loop (task, stream,
+cancel). The adapter then exposes those functions as a UHB backend.
 
-**Ce que l'adaptateur doit fournir** — un module Python qui implémente les huit
-fonctions, `stream()` branché sur le canal d'événements existant, `health()` sans
-inférence.
+**What the adapter must supply** — a Python module implementing the eight functions,
+`stream()` wired to the existing event channel, `health()` without inference.
 
-**Effort — 2 à 3 semaines. Risque — élevé.** Le couplage entre gateway, profils et
-outils est fort : extraire les huit fonctions sans dupliquer la logique de session
-est le vrai travail. Un adapter qui réimplémente le routage divergera à la première
-évolution du produit.
+**Effort — 2 to 3 weeks. Risk — high.** The coupling between gateway, profiles and
+tools is strong: extracting the eight functions without duplicating session logic is
+the real work. An adapter that reimplements routing will diverge at the product's
+first change.
 
 ---
 
-## 5. Synthèse
+## 5. Synthesis
 
-| Produit | Nature | Contrat d'exécution | Primary possible | Risque | Effort |
+| Product | Nature | Execution contract | Primary possible | Risk | Effort |
 |---|---|---|---|---|---|
-| Harness Maxxing | control plane | aucun (fake CLI + proxy) | oui, non contractuel | élevé | 1–3 sem. |
-| OpenClaw | control plane | `registerCliBackend` + `registerAgentHarness` | oui | moyen | 1–2 sem. |
-| DeepSeek Harness | runtime | plugin Cordis : les 8 fonctions sont à exposer | oui, comme backend | moyen à élevé | 2–4 sem. |
-| Hermes | runtime | aucun | oui, par extraction | élevé | 2–3 sem. |
+| Harness Maxxing | control plane | none (fake CLI + proxy) | yes, non-contractual | high | 1–3 wks |
+| OpenClaw | control plane | `registerCliBackend` + `registerAgentHarness` | yes | medium | 1–2 wks |
+| DeepSeek Harness | runtime | Cordis plugin: the 8 functions must be exposed | yes, as a backend | medium to high | 2–4 wks |
+| Hermes | runtime | none | yes, by extraction | high | 2–3 wks |
 
-Le seul contrat **documenté comme un contrat** est celui d'OpenClaw. Les deux autres
-portes existent et fonctionnent : c'est pourquoi le UHB a une valeur — nommer et
-stabiliser ce que chaque produit laisse ouvert.
+The only contract **documented as a contract** is OpenClaw's. The other two doors
+exist and work: that is precisely why UHB has value — naming and stabilising what
+each product leaves open.

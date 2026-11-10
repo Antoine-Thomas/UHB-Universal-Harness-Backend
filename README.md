@@ -1,158 +1,161 @@
 # UHB — Universal Harness Backend
 
-**UHB est le contrat d'interface qui permet à n'importe quel Control Plane
-d'utiliser n'importe quel backend d'exécution, quel que soit le modèle. Il rend
-les harness Claude-first compatibles avec DeepSeek, Kimi, GLM, OpenAI, et tout
-modèle futur.**
+![Status](https://img.shields.io/badge/status-v0.1%20draft-yellow)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-Statut : **v0.1 — spec only**. Ce dépôt contient un contrat, pas une
-implémentation. Aucun code, aucun binaire, aucun adapter livré.
+This project originates from a French-speaking author. The specification is in
+English to reach the widest audience; discussions and issues can be in either
+language.
+
+**UHB is the interface contract that lets any Control Plane use any execution
+backend, whatever the model. It makes Claude-first harnesses work with DeepSeek,
+Kimi, GLM, OpenAI, and any future model.**
+
+Status: **v0.1 — spec only**. This repository contains a contract, not an
+implementation. No code, no binary, no adapter shipped.
 
 ---
 
-## 1. Le problème
+## 1. The problem
 
-Les control planes d'agents qui comptent aujourd'hui — Harness Maxxing, OpenClaw,
-Hermes — ont été construits autour de Claude Code. Ce n'est pas une décision
-technique, c'est une histoire : Claude Code a fourni le premier CLI d'agent
-utilisable en production, avec sessions persistantes, appels d'outils, streaming
-et compaction. Les harness ont donc pris l'habitude de lancer `claude`, de
-consommer son format `stream-json` et de traiter son vocabulaire comme un
-standard de fait. Résultat : un utilisateur qui possède DeepSeek v4.1 ou Kimi n'a
-pas de chemin propre. Chaque harness a sa propre notion de « modèle exécutable »,
-quand il en a une, et chacune est différente.
+The agent control planes that matter today — Harness Maxxing, OpenClaw, Hermes —
+were built around Claude Code. That is not a technical decision, it is history:
+Claude Code shipped the first agent CLI that was usable in production, with
+persistent sessions, tool calls, streaming and compaction. Harnesses therefore got
+used to launching `claude`, consuming its `stream-json` format and treating its
+vocabulary as a de facto standard. The result: a user who owns DeepSeek v4.1 or
+Kimi has no clean path. Every harness has its own notion of an "executable model",
+when it has one at all, and each one is different.
 
-Anthropic a par ailleurs fermé explicitement la porte au routage d'un modèle
-non-Claude via les abonnements Claude Max. C'est une décision d'Anthropic, pas un
-bug à contourner : toute intégration qui suppose un abonnement Claude Max pour
-faire tourner DeepSeek est une impasse, et UHB ne la propose pas. Ce qui reste —
-et que ce contrat rend explicite — ce sont les voies légitimes : un endpoint HTTP
-compatible, un binaire de CLI substituable, un plugin d'exécution natif.
+Anthropic has also explicitly closed the door on routing a non-Claude model
+through Claude Max subscriptions. That is Anthropic's decision, not a bug to work
+around: any integration that assumes a Claude Max subscription in order to run
+DeepSeek is a dead end, and UHB does not offer it. What remains — and what this
+contract makes explicit — are the legitimate paths: a compatible HTTP endpoint, a
+replaceable CLI binary, a native execution plugin.
 
-Certains runtimes, comme DeepSeek Harness, sont déjà model-agnostic et
-plugin-based. Il leur manque pourtant un contrat d'interface standard pour les
-control planes : le UHB comble ce vide pour DSH, OpenClaw, Harness Maxxing et les
-runtimes à venir.
+Some runtimes, like DeepSeek Harness, are already model-agnostic and plugin-based.
+They still lack a standard interface contract for control planes: UHB fills that
+gap for DSH, OpenClaw, Harness Maxxing, and future runtimes alike.
 
-## 2. La solution
+## 2. The solution
 
-Deux artefacts, et rien d'autre :
+Two artefacts, and nothing else:
 
-1. **Un contrat standard** — huit fonctions pivot ([SPEC.md](SPEC.md) §2) qui
-   décrivent tout ce qu'un control plane demande à un backend d'exécution :
-   lancer une tâche, la streamer, l'annuler, synchroniser la mémoire, charger un
-   skill, router un modèle, résoudre un provider, répondre sur la santé.
-2. **Un adaptateur par control plane** ([ADAPTERS.md](ADAPTERS.md)) — la pièce
-   qui traduit le contrat vers l'interface réelle du control plane : proxy HTTP,
-   CLI substituable, ou plugin natif.
+1. **A standard contract** — eight pivot functions ([SPEC.md](SPEC.md) §2) that
+   describe everything a control plane asks of an execution backend: run a task,
+   stream it, cancel it, sync memory, load a skill, route a model, resolve a
+   provider, report health.
+2. **One adapter per control plane** ([ADAPTERS.md](ADAPTERS.md)) — the piece that
+   translates the contract into the control plane's real interface: HTTP proxy,
+   replaceable CLI, or native plugin.
 
-Un backend qui implémente les huit fonctions est utilisable depuis n'importe quel
-control plane qui possède un adaptateur. Un control plane qui possède un
-adaptateur peut utiliser n'importe quel backend. Le produit cartésien est le but.
+A backend that implements the eight functions is usable from any control plane
+that has an adapter. A control plane that has an adapter can use any backend. The
+cartesian product is the goal.
 
-## 3. Les trois couches
+## 3. The three layers
 
-| Couche | Rôle | Exemples |
+| Layer | Role | Examples |
 |---|---|---|
-| **Control Plane** | décide, gouverne, supervise : UI, sessions, crons, mémoire, notifications | Harness Maxxing, OpenClaw, Hermes |
-| **UHB** | traduit et arbitre : routage de modèle, traduction de protocole, streaming normalisé, annulation, santé | ce contrat |
-| **Runtime** | exécute : appelle le modèle, exécute les outils, renvoie des événements | DeepSeek v4.1, Kimi, GLM, OpenAI, Ollama, Claude |
+| **Control Plane** | decides, governs, supervises: UI, sessions, crons, memory, notifications | Harness Maxxing, OpenClaw, Hermes |
+| **UHB** | translates and arbitrates: model routing, protocol translation, normalised streaming, cancellation, health | this contract |
+| **Runtime** | executes: calls the model, runs the tools, returns events | DeepSeek v4.1, Kimi, GLM, OpenAI, Ollama, Claude |
 
-Les flux, les points d'extension et les invariants sont détaillés dans
+Flows, extension points and invariants are detailed in
 [ARCHITECTURE.md](ARCHITECTURE.md).
 
-### Les huit fonctions, en une ligne
+### The eight functions, one line each
 
-| # | Fonction | Ce qu'elle règle |
+| # | Function | What it settles |
 |---|---|---|
-| 1 | `execute_task` | lancer un tour et recevoir ses événements en flux |
-| 2 | `sync_memory` | écrire la mémoire au bon niveau (workspace, projet, topic) |
-| 3 | `load_skill` | rendre une procédure disponible au modèle |
-| 4 | `route_model` | choisir un modèle à partir d'une intention |
-| 5 | `stream` | garantir un flux utilisable par une UI live |
-| 6 | `cancel` | arrêter proprement une tâche en cours |
-| 7 | `health` | répondre de l'état du backend sans consommer de tokens |
-| 8 | `resolve_provider` | traduire un nom de modèle en endpoint, protocole, clé |
+| 1 | `execute_task` | run a turn and receive its events as a stream |
+| 2 | `sync_memory` | write memory at the right level (workspace, project, topic) |
+| 3 | `load_skill` | make a procedure available to the model |
+| 4 | `route_model` | pick a model from an intent |
+| 5 | `stream` | guarantee a stream a live UI can use |
+| 6 | `cancel` | stop a running task cleanly |
+| 7 | `health` | report backend status without spending tokens |
+| 8 | `resolve_provider` | turn a model name into endpoint, protocol, key |
 
-## 4. Ce que UHB n'est pas
+## 4. What UHB is not
 
-UHB n'est pas un control plane, pas un runtime, pas un modèle, pas un format de
-stockage, et pas un contournement des restrictions d'Anthropic. La liste complète,
-avec les raisons, est dans [NON-GOALS.md](NON-GOALS.md).
+UHB is not a control plane, not a runtime, not a model, not a storage format, and
+not a way around Anthropic's restrictions. The full list, with reasons, is in
+[NON-GOALS.md](NON-GOALS.md).
 
-Le sigle est **UHB** — Universal Harness **Backend**. Le *Runtime* héberge et
-survit (processus, sandbox, reprise après crash) ; le *Backend* exécute et
-s'interchange. On est sur Backend. Le dépôt est nommé en toutes lettres,
-`UHB-Universal-Harness-Backend`, et non `universal-harness-*` : le sigle **UHP**
-(Unified Harness Protocol) existe déjà et désigne un concept proche, qu'il ne faut
-pas confondre avec celui-ci.
+The acronym is **UHB** — Universal Harness **Backend**. The *Runtime* hosts and
+survives (processes, sandbox, crash recovery); the *Backend* executes and is
+swappable. This is Backend. The repository is named out in full,
+`UHB-Universal-Harness-Backend`, and not `universal-harness-*`: the acronym **UHP**
+(Unified Harness Protocol) already exists and names a nearby concept that must not
+be confused with this one.
 
-## 5. Pour qui
+## 5. Who it is for
 
-**Développeurs de control planes.** Si votre harness lance `claude` en dur et que
-vous voulez arrêter sans réécrire votre produit, un adaptateur suffit : le contrat
-décrit ce qu'il faut exposer, pas comment réorganiser votre code.
+**Control plane developers.** If your harness launches `claude` in hardcoded form
+and you want to stop without rewriting your product, one adapter is enough: the
+contract describes what to expose, not how to reorganise your code.
 
-**Utilisateurs de modèles non-Claude.** Si vous payez DeepSeek, Kimi, GLM ou un
-endpoint local, vous ne devriez pas dépendre du vocabulaire d'un fournisseur
-concurrent. Le contrat parle en intentions et en références de modèle, pas en
-noms de fournisseur.
+**Non-Claude model users.** If you pay for DeepSeek, Kimi, GLM or a local
+endpoint, you should not depend on the vocabulary of a competing vendor. The
+contract speaks in intents and model references, not in vendor names.
 
-**Mainteneurs de harness alternatifs.** Si vous réimplémentez une boucle d'agent
-en Python, en Go ou en Rust, le contrat définit la surface minimale à exposer pour
-être utilisable depuis les control planes existants — et testable sans UI.
+**Alternative harness maintainers.** If you are reimplementing an agent loop in
+Python, Go or Rust, the contract defines the minimum surface to expose in order to
+be usable from existing control planes — and testable without a UI.
 
-## 6. Comment contribuer
+## 6. How to contribute
 
-Un adapter par PR, doc d'abord : le code vient après validation du contrat. Une
-évolution de spec passe par une issue puis un diff de `SPEC.md`. Voir
+One adapter per PR, docs first: code comes after the contract is validated. A spec
+change goes through an issue and then a diff of `SPEC.md`. See
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
-## 7. Références
+## 7. References
 
 - **Harness Maxxing** — https://github.com/makushingu/harness-maxxing — Fair
-  Source (source-available, pas OSI) : control plane self-hosted construit sur le
-  CLI Claude Code. Lance `claude -p --output-format stream-json --verbose`, garde
-  le binaire substituable via `MAXXING_CLAUDE_BIN`.
-- **OpenClaw** — https://github.com/openclaw/openclaw — MIT : Gateway + deux
-  surfaces d'exécution documentées (`api.registerCliBackend` et
-  `api.registerAgentHarness`), plus un pont MCP optionnel pour les outils.
-- **DeepSeek V4.1 (pattern proxy)** —
-  https://github.com/shi3z/deepseekv4.1-A100-custom — `examples/claude_code/` :
-  Claude Code → LiteLLM → moteur d'inférence, traduction Anthropic ↔ OpenAI.
-- **LiteLLM** — https://github.com/BerriAI/litellm — la référence éprouvée de la
-  traduction de protocole Anthropic ↔ OpenAI.
-- `docs.openclaw.kr/gateway/cli-backends` — miroir tiers de la documentation
-  OpenClaw. Il décrit les CLI backends comme un mode « text-only, fallback
-  uniquement » ; la doc du dépôt amont dit l'inverse (backend primaire, outils via
-  pont MCP, JSONL). Les écarts mesurés sont listés dans
-  [ADAPTERS.md](ADAPTERS.md) §2.
+  Source (source-available, not OSI): self-hosted control plane built on the Claude
+  Code CLI. Launches `claude -p --output-format stream-json --verbose`, keeps the
+  binary replaceable through `MAXXING_CLAUDE_BIN`.
+- **OpenClaw** — https://github.com/openclaw/openclaw — MIT: Gateway plus two
+  documented execution surfaces (`api.registerCliBackend` and
+  `api.registerAgentHarness`), and an optional MCP bridge for tools.
+- **DeepSeek V4.1 (proxy pattern)** —
+  https://github.com/shi3z/deepseekv4.1-A100-custom — `examples/claude_code/`:
+  Claude Code → LiteLLM → inference engine, Anthropic ↔ OpenAI translation.
+- **LiteLLM** — https://github.com/BerriAI/litellm — the proven reference for
+  Anthropic ↔ OpenAI protocol translation.
+- `docs.openclaw.kr/gateway/cli-backends` — third-party mirror of the OpenClaw
+  documentation. It describes CLI backends as "text-only, fallback only"; the
+  upstream repository docs say the opposite (primary backend, tools through the MCP
+  bridge, JSONL). Measured gaps are listed in [ADAPTERS.md](ADAPTERS.md) §2.
 
-## 8. État du dépôt
+## 8. Repository status
 
-Ce qui existe aujourd'hui : la spec, et rien d'autre.
+What exists today: the spec, and nothing else.
 
-| Fichier | Rôle |
+| File | Role |
 |---|---|
-| [SPEC.md](SPEC.md) | le contrat normatif : 8 fonctions, 3 protocoles, machine à états |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | les 3 couches, le flux, les points d'extension, les invariants |
-| [ADAPTERS.md](ADAPTERS.md) | état mesuré de chaque control plane connu |
-| [NON-GOALS.md](NON-GOALS.md) | ce que UHB refuse de faire, et pourquoi |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | comment proposer un adapter ou une évolution |
+| [SPEC.md](SPEC.md) | the normative contract: 8 functions, 3 protocols, state machine |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | the 3 layers, the request flow, extension points, invariants |
+| [ADAPTERS.md](ADAPTERS.md) | measured state of every known control plane and runtime |
+| [NON-GOALS.md](NON-GOALS.md) | what UHB refuses to do, and why |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | how to propose an adapter or a spec change |
 
-Ce qui n'existe pas encore, et qui viendra après validation du contrat : un backend
-de référence (les 8 fonctions au-dessus d'un runtime OpenAI-compatible), un proxy
-Anthropic ↔ OpenAI, et un premier adapter — OpenClaw, parce que c'est le seul dont
-le contrat d'exécution soit documenté comme un contrat.
+What does not exist yet, and will come after the contract is validated: a
+reference backend (the 8 functions over an OpenAI-compatible runtime), an
+Anthropic ↔ OpenAI proxy, and a first adapter — OpenClaw, because it is the only
+one whose execution contract is documented as a contract.
 
-Ordre de lecture conseillé : ce README, puis `SPEC.md` §2, puis `ARCHITECTURE.md`,
-puis `ADAPTERS.md`. Le reste est du contexte.
+Suggested reading order: this README, then `SPEC.md` §2, then `ARCHITECTURE.md`,
+then `ADAPTERS.md`. The rest is context.
 
-Une remarque sur le contrat passe par une issue `Spec: <sujet>` ; un nouveau
-control plane par une issue `Adapter: <nom>`. Voir [CONTRIBUTING.md](CONTRIBUTING.md).
+A remark about the contract goes through an issue titled `Spec: <topic>`; a new
+control plane through an issue titled `Adapter: <name>`. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
-## Licence
+## License
 
-MIT — voir [LICENSE](LICENSE). Le contrat est libre de réimplémentation ; les
-marques, licences et marques déposées des control planes cités restent celles de
-leurs auteurs. Ce dépôt ne contient ni ne redistribue leur code.
+MIT — see [LICENSE](LICENSE). The contract is free to reimplement; the trademarks,
+licenses and registered marks of the control planes cited above remain those of
+their authors. This repository contains and redistributes none of their code.

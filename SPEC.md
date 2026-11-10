@@ -1,33 +1,36 @@
 # SPEC — UHB v0.1
 
-Normative. **DOIT**, **DEVRAIT** et **PEUT** ont leur sens RFC 2119.
+![Status](https://img.shields.io/badge/status-v0.1%20draft-yellow)
+![License](https://img.shields.io/badge/license-MIT-blue)
+
+Normative. **MUST**, **SHOULD** and **MAY** carry their RFC 2119 meaning.
 
 ---
 
-## 1. Définitions
+## 1. Definitions
 
-**Control Plane** — la couche qui décide, gouverne et supervise. Elle possède
-l'interface utilisateur, le cycle de vie des sessions, les tâches planifiées
-(crons), la mémoire au niveau produit, les notifications et les politiques
-(permissions, quotas, approbations). Elle ne parle pas aux modèles : elle parle au
-UHB. Exemples mesurés : Harness Maxxing (sessions + crons + Telegram), OpenClaw
-(Gateway + canaux + Control UI), Hermes (gateway + profils + mémoire).
+**Control Plane** — the layer that decides, governs and supervises. It owns the
+user interface, session lifecycle, scheduled jobs (crons), product-level memory,
+notifications and policies (permissions, quotas, approvals). It does not talk to
+models: it talks to UHB. Measured examples: Harness Maxxing (sessions, crons,
+Telegram), OpenClaw (Gateway, channels, Control UI), Hermes (gateway, profiles,
+memory).
 
-**Runtime / Data Plane** — la couche qui exécute. Elle détient la boucle du modèle :
-elle envoie le prompt, reçoit le texte et les appels d'outils, exécute ces outils,
-gère son contexte et sa compaction, et renvoie des événements. Elle ne connaît ni
-sessions produit, ni crons, ni UI.
+**Runtime / Data Plane** — the layer that executes. It owns the model loop: it
+sends the prompt, receives text and tool calls, executes those tools, manages its
+context and compaction, and returns events. It knows nothing of product sessions,
+crons or UI.
 
-**UHB** — le contrat d'interface entre les deux. Il définit huit fonctions, trois
-protocoles de transport et une machine à états. Il ne détient ni la décision (c'est
-le Control Plane) ni l'exécution (c'est le Runtime) : il traduit, route et
-normalise.
+**UHB** — the interface contract between the two. It defines eight functions,
+three transport protocols and one state machine. It owns neither the decision
+(that is the Control Plane) nor the execution (that is the Runtime): it translates,
+routes and normalises.
 
-Un **adapter** expose le contrat dans l'interface réelle d'un control plane donné.
-Un **backend** implémente le contrat au-dessus d'un runtime donné. Les deux sont
-hors périmètre de ce dépôt.
+An **adapter** exposes the contract inside the real interface of a given control
+plane. A **backend** implements the contract on top of a given runtime. Both are
+out of scope for this repository.
 
-### Types de base
+### Base types
 
 ```ts
 type MemoryLevel = "workspace" | "project" | "topic";
@@ -36,16 +39,16 @@ type StopReason  = "done" | "failed" | "cancelled" | "timeout" | "budget";
 interface ToolSpec { name: string; description: string; input_schema: Record<string, unknown>; }
 
 interface TaskContext {
-  session_id: string;        // identifiant stable fourni par le control plane
-  workspace: string;         // racine de travail, chemin absolu
-  topic?: string;            // sous-dossier logique (projet/topic)
-  system?: string;           // prompt système déjà assemblé par le control plane
-  tools?: ToolSpec[];        // outils autorisés pour ce tour (vide = aucun)
-  model_ref?: string;        // réf. imposée ; sinon route_model décide
+  session_id: string;        // stable identifier supplied by the control plane
+  workspace: string;         // working root, absolute path
+  topic?: string;            // logical sub-folder (project/topic)
+  system?: string;           // system prompt already assembled by the control plane
+  tools?: ToolSpec[];        // tools allowed for this turn (empty = none)
+  model_ref?: string;        // imposed ref; otherwise route_model decides
   memory?: MemoryLevel;
   metadata?: Record<string, string>;
   timeout_ms?: number;
-  idempotency_key?: string;  // voir §5
+  idempotency_key?: string;  // see §5
 }
 
 type StreamEvent =
@@ -79,10 +82,10 @@ interface HealthStatus     { ok: boolean; version: string; queue_depth: number; 
 
 ---
 
-## 2. Les huit fonctions pivot
+## 2. The eight pivot functions
 
-Chaque fonction DOIT exister. Une fonction sans sens pour un runtime donné DOIT
-renvoyer une erreur explicite (`code: "unsupported"`), jamais un succès silencieux.
+Every function MUST exist. A function that has no meaning for a given runtime
+MUST return an explicit error (`code: "unsupported"`), never a silent success.
 
 ### 2.1 `execute_task`
 
@@ -90,29 +93,29 @@ renvoyer une erreur explicite (`code: "unsupported"`), jamais un succès silenci
 execute_task(prompt: string, context: TaskContext): AsyncIterable<StreamEvent>
 ```
 
-Lance un tour d'agent et rend ses événements au fil de l'eau. C'est la fonction
-centrale : sans elle, un backend n'est pas un backend.
+Runs one agent turn and yields its events as they happen. This is the central
+function: without it, a backend is not a backend.
 
-**Contrainte** — le premier événement émis DOIT être `start`, le dernier DOIT être
-`end`. Aucun événement après `end`. Si `context.idempotency_key` est fourni, un
-second appel avec la même clé NE DOIT PAS créer un second tour (§5). Le prompt ne
-DOIT PAS contenir le prompt système : celui-ci voyage dans `context.system`.
+**Constraint** — the first event emitted MUST be `start`, the last MUST be `end`.
+No event after `end`. If `context.idempotency_key` is supplied, a second call with
+the same key MUST NOT create a second turn (§5). The prompt MUST NOT contain the
+system prompt: that travels in `context.system`.
 
 ```ts
-const it = uhb.execute_task("corrige le test qui échoue", {
+const it = uhb.execute_task("fix the failing test", {
   session_id: "s-7f3a", workspace: "/work/projects/acme",
-  topic: "projects/acme/topics/api", system: "Tu es un agent de code.",
+  topic: "projects/acme/topics/api", system: "You are a coding agent.",
   tools: [{ name: "bash", description: "shell", input_schema: { type: "object" } }],
   model_ref: "deepseek/deepseek-v4.1-flash",
 });
 for await (const ev of it) render(ev);
 
-// flux rendu
+// yielded stream
 { type: "start", task_id: "t-91", model_ref: "deepseek/deepseek-v4.1-flash", at: 1770000000.1 }
-{ type: "thinking", delta: "Je regarde d'abord le test…", at: 1770000000.4 }
+{ type: "thinking", delta: "Let me look at the test first…", at: 1770000000.4 }
 { type: "tool_call", id: "call_1", name: "bash", input: { cmd: "pytest -q" }, at: 1770000000.9 }
 { type: "tool_result", id: "call_1", ok: false, output: "1 failed", at: 1770000001.8 }
-{ type: "text", delta: "L'assertion porte sur…", at: 1770000002.1 }
+{ type: "text", delta: "The assertion is about…", at: 1770000002.1 }
 { type: "usage", input_tokens: 1842, output_tokens: 233, at: 1770000002.4 }
 { type: "end", task_id: "t-91", reason: "done", at: 1770000002.4 }
 ```
@@ -123,16 +126,16 @@ for await (const ev of it) render(ev);
 sync_memory(level: MemoryLevel, content: string): MemorySyncResult
 ```
 
-Écrit ou fusionne un bloc de mémoire au niveau demandé, sans jamais écraser le
-contenu d'un autre niveau.
+Writes or merges a block of memory at the requested level, without ever
+overwriting the content of another level.
 
-**Contrainte** — idempotent par contenu : réécrire le même `content` au même niveau
-NE DOIT PAS produire de doublon. Un conflit (écriture concurrente) DOIT être
-rapporté via `conflict: true` plutôt que résolu en silence. UHB négocie le format
-avec le runtime ; il ne l'impose pas (voir NON-GOALS §5).
+**Constraint** — idempotent by content: rewriting the same `content` at the same
+level MUST NOT produce a duplicate. A conflict (concurrent write) MUST be reported
+through `conflict: true` rather than resolved silently. UHB negotiates the format
+with the runtime; it does not impose it (see NON-GOALS §5).
 
 ```ts
-uhb.sync_memory("project", "## Décisions\n- API en Rust, pas en Go.");
+uhb.sync_memory("project", "## Decisions\n- API in Rust, not Go.");
 // → { level: "project", path: "/work/projects/acme/memory.md",
 //     bytes: 46, conflict: false, truncated: false }
 ```
@@ -143,17 +146,17 @@ uhb.sync_memory("project", "## Décisions\n- API en Rust, pas en Go.");
 load_skill(skill_id: string): SkillDescriptor
 ```
 
-Rend une procédure disponible au modèle : identifiant, version, description, chemin
-lisible, dépendances.
+Makes a procedure available to the model: identifier, version, description,
+readable path, dependencies.
 
-**Contrainte** — synchrone et sans appel réseau : le modèle ne peut pas attendre un
-chargement de skill. Un `skill_id` inconnu DOIT lever une erreur typée, pas
-retourner un descripteur vide.
+**Constraint** — synchronous and with no network call: the model cannot wait for
+a skill load. An unknown `skill_id` MUST raise a typed error, not return an empty
+descriptor.
 
 ```ts
 uhb.load_skill("code-quality:review");
 // → { skill_id: "code-quality:review", name: "Code review", version: "1.2",
-//     description: "Revue ciblée : correctness, sécurité, style",
+//     description: "Targeted review: correctness, security, style",
 //     path: "/skills/code-quality/SKILL.md", requires: ["git"] }
 ```
 
@@ -163,17 +166,17 @@ uhb.load_skill("code-quality:review");
 route_model(intent: ModelIntent): ModelRef
 ```
 
-Choisit une référence de modèle à partir d'une intention (capacité, coût, contexte,
-localité, préférences), et non d'un nom de fournisseur.
+Picks a model reference from an intent (capability, cost, context, locality,
+preferences), not from a vendor name.
 
-**Contrainte** — déterministe pour une même intention et un même état de
-configuration, et DOIT documenter sa `rationale`. Elle PEUT consulter `health()` en
-interne ; elle NE DOIT PAS effectuer d'inférence pour décider.
+**Constraint** — deterministic for a given intent and configuration state, and MUST
+document its `rationale`. It MAY consult `health()` internally; it MUST NOT perform
+inference in order to decide.
 
 ```ts
 uhb.route_model({ capability: "code", min_context: 200_000, locality: "remote" });
 // → { model_ref: "deepseek/deepseek-v4.1-pro",
-//     rationale: "code + 256K contexte, coût < 0.60 $/Mtok" }
+//     rationale: "code + 256K context, cost < $0.60/Mtok" }
 ```
 
 ### 2.5 `stream`
@@ -182,16 +185,16 @@ uhb.route_model({ capability: "code", min_context: 200_000, locality: "remote" }
 stream(output: StreamEvent): void
 ```
 
-Pousse un événement vers la surface de consommation (UI live). Obligatoire : c'est
-ce qui rend les appels d'outils, les tokens et les diffs visibles en temps réel.
+Pushes an event toward the consumption surface (live UI). Mandatory: this is what
+makes tool calls, tokens and diffs visible in real time.
 
-**Contrainte** — synchrone, non bloquant, ordonné. Un backend DOIT pouvoir produire
-`stream` sans savoir qui consomme (SSE, WebSocket, stdout JSONL, fichier de log).
-Le contrat ne fixe pas le transport : il fixe l'ordre et la forme.
+**Constraint** — synchronous, non-blocking, ordered. A backend MUST be able to
+produce `stream` without knowing who consumes it (SSE, WebSocket, JSONL on stdout,
+log file). The contract does not fix the transport: it fixes order and shape.
 
 ```ts
 uhb.stream({ type: "text", delta: "```diff\n- assert x == 1\n+ assert x == 2\n```", at: 1770000003 });
-// → aucun retour ; l'événement est consommé par le canal ouvert au §2.1
+// → no return value; the event is consumed by the channel opened in §2.1
 ```
 
 ### 2.6 `cancel`
@@ -200,13 +203,13 @@ uhb.stream({ type: "text", delta: "```diff\n- assert x == 1\n+ assert x == 2\n``
 cancel(task_id: string): CancelResult
 ```
 
-Demande l'arrêt d'une tâche. L'arrêt DOIT être coopératif : le backend laisse au
-runtime le soin de terminer l'exécution d'un outil en cours, puis émet `end` avec
+Requests that a task stop. Cancellation MUST be cooperative: the backend lets the
+runtime finish an in-flight tool execution, then emits `end` with
 `reason: "cancelled"`.
 
-**Contrainte** — idempotent : annuler une tâche déjà terminée rend
-`{ cancelled: false, already_done: true }` et sort en succès. Un `task_id` inconnu
-rend `already_done: true` avec `reason: "unknown_task"`.
+**Constraint** — idempotent: cancelling an already finished task returns
+`{ cancelled: false, already_done: true }` and succeeds. An unknown `task_id`
+returns `already_done: true` with `reason: "unknown_task"`.
 
 ```ts
 uhb.cancel("t-91");
@@ -219,11 +222,11 @@ uhb.cancel("t-91");
 health(): HealthStatus
 ```
 
-État du backend : version, providers joignables, profondeur de file.
+Backend status: version, reachable providers, queue depth.
 
-**Contrainte** — NE DOIT PAS consommer de tokens ni lancer d'inférence. DOIT
-répondre en moins de 2 s même si un provider est injoignable (timeout court par
-provider, résultat partiel plutôt qu'échec global).
+**Constraint** — MUST NOT spend tokens or start inference. MUST answer in under 2 s
+even when a provider is unreachable (short per-provider timeout, partial result
+rather than global failure).
 
 ```ts
 uhb.health();
@@ -237,12 +240,12 @@ uhb.health();
 resolve_provider(model_ref: string): ProviderDescriptor
 ```
 
-Traduit une référence de modèle en coordonnées d'appel : protocole, URL de base,
-variable d'environnement qui porte la clé, identifiant natif du modèle.
+Turns a model reference into call coordinates: protocol, base URL, the environment
+variable that carries the key, the model's native identifier.
 
-**Contrainte** — `api_key_env` est un **nom de variable**, jamais une valeur : le
-contrat ne transporte aucun secret. Un `model_ref` non résolvable DOIT lever une
-erreur typée listant les références connues.
+**Constraint** — `api_key_env` is a variable **name**, never a value: the contract
+carries no secret. An unresolvable `model_ref` MUST raise a typed error listing the
+known references.
 
 ```ts
 uhb.resolve_provider("deepseek/deepseek-v4.1-flash");
@@ -253,148 +256,150 @@ uhb.resolve_provider("deepseek/deepseek-v4.1-flash");
 
 ---
 
-## 3. Les trois protocoles supportés
+## 3. The three supported protocols
 
 ### 3.1 Anthropic — `POST /v1/messages`
 
-Pour Claude Code et tout runtime qui imite son dialecte. C'est le protocole que la
-majorité des control planes Claude-first parlent déjà.
+For Claude Code and any runtime that imitates its dialect. This is the protocol
+most Claude-first control planes already speak.
 
-| Champ | Statut | Note |
+| Field | Status | Note |
 |---|---|---|
-| `model` | requis | identifiant natif du modèle |
-| `max_tokens` | requis | plafond de sortie |
-| `messages[]` | requis | `role: user\|assistant`, `content` texte ou blocs |
-| `system` | optionnel | chaîne ou blocs |
-| `tools[]` | optionnel | `{name, description, input_schema}` |
-| `tool_choice` | optionnel | `auto\|any\|tool` |
-| `stream` | optionnel | `true` → SSE `message_start`, `content_block_delta`, `message_stop` |
-| `stop_sequences`, `metadata` | optionnel | |
+| `model` | required | native model identifier |
+| `max_tokens` | required | output ceiling |
+| `messages[]` | required | `role: user\|assistant`, `content` text or blocks |
+| `system` | optional | string or blocks |
+| `tools[]` | optional | `{name, description, input_schema}` |
+| `tool_choice` | optional | `auto\|any\|tool` |
+| `stream` | optional | `true` → SSE `message_start`, `content_block_delta`, `message_stop` |
+| `stop_sequences`, `metadata` | optional | |
 
-Réponse non-streamée : `{ id, type: "message", role, content: Block[], stop_reason,
-usage }` où `Block` = `{type:"text",text}` | `{type:"tool_use",id,name,input}` |
-`{type:"thinking",thinking}`. En flux, chaque delta est un `content_block_delta`
-avec `index` — l'index doit être préservé, sinon les diffs d'outils arrivent dans le
-désordre.
+Non-streamed response: `{ id, type: "message", role, content: Block[], stop_reason,
+usage }` where `Block` = `{type:"text",text}` | `{type:"tool_use",id,name,input}` |
+`{type:"thinking",thinking}`. In streaming mode each delta is a `content_block_delta`
+carrying an `index` — the index must be preserved, otherwise tool diffs arrive out
+of order.
 
 ### 3.2 OpenAI — `POST /v1/chat/completions`
 
-Pour DeepSeek, Kimi, GLM, OpenAI, Ollama, vLLM, et la majorité des providers. C'est
-le plus petit dénominateur commun du marché.
+For DeepSeek, Kimi, GLM, OpenAI, Ollama, vLLM and most providers. This is the
+market's lowest common denominator.
 
-| Champ | Statut | Note |
+| Field | Status | Note |
 |---|---|---|
-| `model` | requis | identifiant natif |
-| `messages[]` | requis | `role: system\|user\|assistant\|tool` |
-| `max_tokens` | optionnel | |
-| `tools[]` | optionnel | `{type:"function", function:{name, description, parameters}}` |
-| `tool_choice` | optionnel | `auto\|none\|required\|{...}` |
-| `stream` | optionnel | `true` → SSE `data: {...}` + `data: [DONE]` |
-| `stream_options` | optionnel | `{include_usage: true}` |
-| `temperature`, `top_p` | optionnel | |
+| `model` | required | native identifier |
+| `messages[]` | required | `role: system\|user\|assistant\|tool` |
+| `max_tokens` | optional | |
+| `tools[]` | optional | `{type:"function", function:{name, description, parameters}}` |
+| `tool_choice` | optional | `auto\|none\|required\|{...}` |
+| `stream` | optional | `true` → SSE `data: {...}` + `data: [DONE]` |
+| `stream_options` | optional | `{include_usage: true}` |
+| `temperature`, `top_p` | optional | |
 
-Réponse : `{ id, choices:[{ index, message:{role, content, tool_calls?},
-finish_reason }], usage }`. `tool_calls[].function.arguments` est une **chaîne
-JSON**, pas un objet — la traduction vers Anthropic DOIT parser, et échouer
-proprement sur JSON invalide.
+Response: `{ id, choices:[{ index, message:{role, content, tool_calls?},
+finish_reason }], usage }`. `tool_calls[].function.arguments` is a **JSON string**,
+not an object — translation toward Anthropic MUST parse it, and fail cleanly on
+invalid JSON.
 
-### 3.3 DeepSeek natif — `POST /v1/chat/completions` + extensions
+### 3.3 DeepSeek native — `POST /v1/chat/completions` + extensions
 
-Même endpoint que 3.2, avec des champs supplémentaires. Utiliser ce protocole
-seulement quand le backend doit exposer les capacités spécifiques ; sinon 3.2 suffit
-et reste portable.
+Same endpoint as 3.2, with extra fields. Use this protocol only when the backend
+must expose the specific capabilities; otherwise 3.2 is enough and stays portable.
 
-| Extension | Statut | Note |
+| Extension | Status | Note |
 |---|---|---|
-| `reasoning_content` | optionnel (réponse) | raisonnement séparé du texte visible |
-| `reasoning_effort` | optionnel (requête) | budget de raisonnement |
-| `messages[].reasoning_content` | optionnel | à rejouer ou non selon le modèle |
-| `tool_calls` parallèles | optionnel | plusieurs appels dans un même message |
-| `usage.prompt_cache_hit_tokens` | optionnel | cache de préfixe |
+| `reasoning_content` | optional (response) | reasoning kept apart from visible text |
+| `reasoning_effort` | optional (request) | reasoning budget |
+| `messages[].reasoning_content` | optional | replay or not, depending on the model |
+| parallel `tool_calls` | optional | several calls in one message |
+| `usage.prompt_cache_hit_tokens` | optional | prefix cache |
 
-Règle de traduction : `reasoning_content` DOIT devenir un bloc `thinking` côté
-Anthropic, jamais du texte visible. Un backend qui ne sait pas le distinguer DOIT le
-supprimer plutôt que le fusionner.
+Translation rule: `reasoning_content` MUST become a `thinking` block on the
+Anthropic side, never visible text. A backend that cannot tell them apart MUST drop
+it rather than merge it.
 
 ---
 
-## 4. Le pattern « proxy de protocole »
+## 4. The "protocol proxy" pattern
 
-UHB peut se brancher derrière un control plane Claude-first **sans patcher le control
-plane**. C'est le pattern LiteLLM, documenté et éprouvé (voir
-[ADAPTERS.md](ADAPTERS.md) §1 et §2).
+UHB can sit behind a Claude-first control plane **without patching that control
+plane**. This is the LiteLLM pattern, documented and proven (see
+[ADAPTERS.md](ADAPTERS.md) §1 and §2).
 
-1. Le control plane croit parler à Anthropic : il envoie `POST /v1/messages` avec ses
-   outils et son prompt système.
-2. UHB reçoit la requête, résout le modèle demandé (`resolve_provider`), choisit le
-   protocole cible.
-3. UHB traduit vers OpenAI `/v1/chat/completions` : `system` → message `system`,
-   blocs `tool_use` → `tool_calls`, blocs `tool_result` → messages `role: "tool"`,
-   `input_schema` → `parameters`.
-4. Le runtime reçoit la requête traduite, exécute, répond en SSE OpenAI.
-5. UHB retraduit la réponse : `tool_calls` → blocs `tool_use`, `content` → blocs
-   `text`, `reasoning_content` → blocs `thinking`, `finish_reason` → `stop_reason`.
-6. Le control plane reçoit un flux Anthropic valide et ne sait pas que le modèle
-   n'est pas Claude.
+1. The control plane believes it is talking to Anthropic: it sends
+   `POST /v1/messages` with its tools and its system prompt.
+2. UHB receives the request, resolves the requested model (`resolve_provider`),
+   picks the target protocol.
+3. UHB translates to OpenAI `/v1/chat/completions`: `system` → a `system` message,
+   `tool_use` blocks → `tool_calls`, `tool_result` blocks → messages with
+   `role: "tool"`, `input_schema` → `parameters`.
+4. The runtime receives the translated request, executes, answers in OpenAI SSE.
+5. UHB translates the response back: `tool_calls` → `tool_use` blocks, `content` →
+   `text` blocks, `reasoning_content` → `thinking` blocks, `finish_reason` →
+   `stop_reason`.
+6. The control plane receives a valid Anthropic stream and never learns the model
+   was not Claude.
 
-Trois règles font la différence entre un proxy qui marche et un proxy qui ment :
+Three rules separate a proxy that works from a proxy that lies:
 
-- **Les identifiants d'outils survivent.** `tool_use.id` et `tool_call.id` doivent
-  être stables de bout en bout ; un `tool_result` orphelin casse la boucle.
-- **Les raisons de fin sont traduites, pas copiées.** `length` → `max_tokens`,
-  `tool_calls` → `tool_use`, `stop` → `end_turn`. Un `stop_reason` inconnu DOIT être
-  mappé sur `end_turn` et signalé dans les logs, jamais laissé tel quel.
-- **Le flux reste un flux.** Le proxy DOIT relayer les deltas au fur et à mesure.
-  Bufferiser la réponse pour la traduire casse l'UI live et le streaming d'outils,
-  qui sont la raison d'être du contrat.
+- **Tool identifiers survive.** `tool_use.id` and `tool_call.id` must stay stable
+  end to end; an orphaned `tool_result` breaks the loop.
+- **Finish reasons are translated, not copied.** `length` → `max_tokens`,
+  `tool_calls` → `tool_use`, `stop` → `end_turn`. An unknown `stop_reason` MUST be
+  mapped to `end_turn` and reported in the logs, never passed through unchanged.
+- **The stream stays a stream.** The proxy MUST relay deltas as they arrive.
+  Buffering the response in order to translate it breaks the live UI and tool
+  streaming, which are the whole point of the contract.
 
 ---
 
-## 5. Les états d'une tâche
+## 5. Task states
 
 ```
    submit ──▶ queued ──▶ working ──▶ streaming ──▶ done
                           │             │
-                          └─────────────┴──▶ failed      (erreur, timeout, budget)
+                          └─────────────┴──▶ failed      (error, timeout, budget)
                                              ▶ cancelled   (cancel())
 ```
 
-| De | Vers | Déclencheur |
+| From | To | Trigger |
 |---|---|---|
-| `queued` | `working` | le runtime accepte la tâche |
-| `working` | `streaming` | premier `text`, `thinking` ou `tool_call` |
+| `queued` | `working` | the runtime accepts the task |
+| `working` | `streaming` | first `text`, `thinking` or `tool_call` |
 | `streaming` | `done` | `end(reason: "done")` |
-| `working`, `streaming` | `failed` | `error` non retryable, `timeout` ou `budget` |
-| `working`, `streaming` | `cancelled` | `cancel()` accepté |
+| `working`, `streaming` | `failed` | non-retryable `error`, `timeout` or `budget` |
+| `working`, `streaming` | `cancelled` | `cancel()` accepted |
 
-Une transition non listée est une erreur de contrat : elle DOIT être signalée, pas
-absorbée.
+A transition not listed above is a contract error: it MUST be reported, not
+absorbed.
 
-**Idempotence.** Une tâche est identifiée par `task_id`, stable de `start` à `end`.
-`idempotency_key` (optionnel, fourni par le control plane) garantit qu'un rejeu —
-réseau coupé, UI rechargée, message renvoyé — ne crée pas un second tour : le backend
-rend le flux de la tâche existante ou une erreur `duplicate` explicite. `cancel` et
-`health` sont idempotents par nature. `sync_memory` l'est par contenu. `load_skill`,
-`route_model` et `resolve_provider` sont purs : mêmes entrées, même sortie, aucun
-effet de bord.
+**Idempotency.** A task is identified by a `task_id` that is stable from `start` to
+`end`. `idempotency_key` (optional, supplied by the control plane) guarantees that a
+replay — dropped network, reloaded UI, resent message — does not create a second
+turn: the backend either returns the flow of the existing task or an explicit
+`duplicate` error. `cancel` and `health` are idempotent by nature. `sync_memory` is
+idempotent by content. `load_skill`, `route_model` and `resolve_provider` are pure:
+same inputs, same output, no side effect.
 
 ---
 
-## 6. Compatibilité
+## 6. Compatibility
 
-Mesuré en Phase 0 sur les dépôts publics ; preuves dans [ADAPTERS.md](ADAPTERS.md).
+Measured in Phase 0 against the public repositories; evidence in
+[ADAPTERS.md](ADAPTERS.md).
 
-| Control Plane / Runtime | Support | Voie d'intégration | Coût estimé |
+| Control Plane / Runtime | Support | Integration path | Estimated cost |
 |---|---|---|---|
-| **Harness Maxxing** | Partiel | fake CLI via `MAXXING_CLAUDE_BIN`, ou proxy Anthropic (`ANTHROPIC_BASE_URL`) | 1–3 semaines |
-| **OpenClaw** | Oui | plugin `agent harness` natif (`runAttempt`) ou CLI backend (`api.registerCliBackend`) | 1–2 semaines |
-| **DeepSeek Harness (DSH)** | Runtime, `experimental` | plugin DSH (voie secondaire) ou runtime UHB-native (voie principale) | 2–4 semaines |
-| **Hermes** | Partiel | extraction des 8 fonctions depuis le gateway et les profils | 2–3 semaines |
+| **Harness Maxxing** | Partial | fake CLI via `MAXXING_CLAUDE_BIN`, or Anthropic proxy (`ANTHROPIC_BASE_URL`) | 1–3 weeks |
+| **OpenClaw** | Yes | native `agent harness` plugin (`runAttempt`) or CLI backend (`api.registerCliBackend`) | 1–2 weeks |
+| **DeepSeek Harness (DSH)** | Runtime, `experimental` | DSH plugin (secondary path) or UHB-native runtime (primary path) | 2–4 weeks |
+| **Hermes** | Partial | extraction of the 8 functions from the gateway and the profiles | 2–3 weeks |
 
-Note — DSH est un cas à part : déjà model-agnostic et plugin-based, il n'a pas
-besoin d'être rendu universel. UHB lui fournit le contrat d'interface qui permet à
-n'importe quel control plane de l'utiliser sans apprendre Cordis ni son API.
+Note — DSH is a special case: already model-agnostic and plugin-based, it does not
+need to be made universal. UHB gives it the interface contract that lets any
+control plane use it without learning Cordis or its plugin API.
 
-Lecture : « Support » qualifie la capacité du produit à héberger un backend externe
-**sans être patché**. « Runtime » = le produit exécute, c'est un backend candidat et
-non un hôte ; « Partiel » = une porte existe, sans contrat d'exécution documenté.
+Reading: "Support" qualifies the product's ability to host an external backend
+**without being patched**. "Runtime" means the product executes and is a candidate
+backend, not a host; "Partial" means a door exists, without a documented execution
+contract.
