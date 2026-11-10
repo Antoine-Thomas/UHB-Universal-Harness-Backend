@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from uhb import __version__
 from uhb.entrypoints import cli, settings, status as status_module, update as update_module
 
 
@@ -258,7 +259,7 @@ def test_run_wires_host_port_and_mode(monkeypatch, capsys):
     assert code == 0
     assert seen == {"port": 8099, "host": "127.0.0.1"}
     banner = capsys.readouterr().out
-    assert "UHB 0.1.0" in banner
+    assert f"UHB {__version__}" in banner, "the banner must print the real version"
     assert "mode      dev" in banner
     assert "http://127.0.0.1:8099/" in banner
     assert "http://127.0.0.1:8099/docs/manuel.pdf" in banner
@@ -314,7 +315,7 @@ def test_status_endpoint_answers_with_the_instance_facts(panel_server):
     assert status == 200
     assert headers["content-type"].startswith("application/json")
     assert payload["connected"] is True
-    assert payload["version"] == "0.1.0"
+    assert payload["version"] == __version__
     assert payload["mode"] == "chat"
     assert payload["docs"]["manual"] == "/docs/manuel.pdf"
     assert payload["modes"] == ["chat", "dev", "observe", "review"]
