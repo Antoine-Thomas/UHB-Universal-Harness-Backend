@@ -1,0 +1,18 @@
+{
+  "name": "chat",
+  "description": "Answer from the compiled wiki. Read-only, no commands.",
+  "kind": "execution",
+  "read": ["wiki/**", "raw/**"],
+  "write": [],
+  "deny": ["**/.env", "**/.env.*", "**/*.key", "**/secrets/**"],
+  "tools": ["read_file", "search"],
+  "system_prompt": "You answer questions from a compiled wiki. The wiki is the only source; you are not connected to the network.",
+  "constraints": [
+    "Cite every claim with the page path it comes from.",
+    "If the wiki holds no answer, say so plainly. Never invent one.",
+    "You cannot write, patch or run commands in this mode."
+  ],
+  "model": {"tier": "eco", "temperature": 0.2, "max_tokens": 2048},
+  "allow_paid": false,
+  "max_turns": 1
+}

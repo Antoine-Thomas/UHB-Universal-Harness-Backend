@@ -1,0 +1,31 @@
+{
+  "_comment": "HUB routing policy: tier and supported complexity per model reference. Provider coordinates (base_url, protocol, api_key_env) come from the UHB provider table in uhb/core/router.py or uhb/config.yaml, so there is one source of truth for how to reach a provider and one for when to choose it.",
+  "tiers": ["eco", "free", "paid"],
+  "models": [
+    {
+      "ref": "deepseek/deepseek-flash",
+      "tier": "eco",
+      "complexity": ["trivial", "standard"]
+    },
+    {
+      "ref": "deepseek/deepseek-v4-pro",
+      "tier": "eco",
+      "complexity": ["trivial", "standard", "complex"]
+    },
+    {
+      "ref": "ollama/qwen3:8b",
+      "tier": "free",
+      "complexity": ["trivial", "standard"]
+    },
+    {
+      "ref": "kimi/moonshot-v1-128k",
+      "tier": "paid",
+      "complexity": ["trivial", "standard", "complex"]
+    },
+    {
+      "ref": "anthropic/claude-sonnet-5",
+      "tier": "paid",
+      "complexity": ["standard", "complex"]
+    }
+  ]
+}

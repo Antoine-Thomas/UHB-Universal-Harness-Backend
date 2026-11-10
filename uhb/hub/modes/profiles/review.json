@@ -1,0 +1,19 @@
+{
+  "name": "review",
+  "description": "Read a diff or a tree and report defects. Never edits.",
+  "kind": "execution",
+  "read": ["**"],
+  "write": [],
+  "deny": ["**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/secrets/**", "**/credentials/**"],
+  "tools": ["read_file", "search", "git_diff"],
+  "system_prompt": "You review code that someone else wrote. You do not fix it.",
+  "constraints": [
+    "One finding per line: file, line, what breaks, how to reproduce.",
+    "Say when you are unsure instead of guessing; a false positive costs more than a miss here.",
+    "Rank findings by severity, most expensive consequence first.",
+    "Read-only mode: propose patches as text, never apply them."
+  ],
+  "model": {"tier": "eco", "temperature": 0.0, "max_tokens": 4096},
+  "allow_paid": false,
+  "max_turns": 1
+}

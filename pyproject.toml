@@ -1,0 +1,66 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# The PyPI name `uhb` is taken by an unrelated project: the distribution is
+# `uhb-harness`, while the console script stays `uhb`.
+name = "uhb-harness"
+dynamic = ["version"]
+description = "Universal Harness Backend: execution modes, intent routing and a compiled wiki for any agent harness."
+readme = "uhb/README.md"
+requires-python = ">=3.11"
+# The specification is MIT (LICENSE); the implementation under uhb/ is Fair
+# Source (LICENSE-IMPLEMENTATION.md). This distribution ships the implementation.
+# PEP 639 form: a plain SPDX expression, plus the two files.
+license = "FSL-1.1-MIT"
+license-files = ["uhb/LICENSE", "uhb/LICENSE-IMPLEMENTATION.md"]
+authors = [{ name = "Thomas Leroyer" }]
+keywords = ["agents", "harness", "router", "llm", "control-plane", "wiki"]
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+]
+# httpx is the only runtime dependency: one HTTP client, used for provider calls.
+dependencies = ["httpx>=0.25"]
+
+[project.optional-dependencies]
+# `uhb config set` writes config.yaml, which needs a YAML writer.
+yaml = ["pyyaml>=6"]
+test = ["pytest>=8", "pyyaml>=6"]
+
+[project.urls]
+Homepage = "https://github.com/Antoine-Thomas/UHB-Universal-Harness-Backend"
+
+[project.scripts]
+uhb = "uhb.entrypoints.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "uhb.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["uhb*"]
+# Off: with namespace discovery, any directory holding a .py becomes a package —
+# and the MARI submodule's Python samples would ship. Only real packages count.
+namespaces = false
+
+# Off: the default walks every package directory and would drag the MARI
+# submodule's Python samples into the wheel. Only the rules below ship.
+[tool.setuptools]
+include-package-data = false
+
+
+# The policy is data, so the data has to ship: without these, an installed UHB
+# starts with no mode profiles and no routing catalog.
+[tool.setuptools.package-data]
+"uhb" = ["config.example.yaml", "docs/*.md", "docs/*.pdf",
+         "services/rag/*.py", "services/rag/*.txt", "services/rag/*.md",
+         "services/mari/*.md", "services/mari/bridge/*.cs",
+         "services/mari/bridge/*.csproj", "services/mari/bridge/*.json"]
+"uhb.hub.modes" = ["profiles/*.json"]
+"uhb.hub.router" = ["catalog.json"]
+"uhb.hub.wiki" = ["wiki/*.md"]
+
+[tool.pytest.ini_options]
+testpaths = ["uhb/tests"]

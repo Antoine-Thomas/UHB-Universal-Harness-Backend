@@ -1,0 +1,20 @@
+# UHB server, container image.
+#
+# Build from the repository root so the package data (mode profiles, routing
+# catalog, manuals, integration guide) is inside the image:
+#   docker build -f docker/Dockerfile.uhb -t uhb:0.1.0 .
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+COPY pyproject.toml ./
+COPY uhb ./uhb
+RUN python -m pip install .
+
+# Loopback is impossible inside a container, so the bind is explicit and the
+# published port in docker-compose.yml stays 127.0.0.1-only on the host.
+EXPOSE 8101
+CMD ["uhb", "run", "--host", "0.0.0.0", "--port", "8101", "--mode", "chat"]

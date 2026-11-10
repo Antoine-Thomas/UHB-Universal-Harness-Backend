@@ -1,0 +1,19 @@
+{
+  "name": "dev",
+  "description": "Change code and tests. Write scope is the project, never configuration or secrets.",
+  "kind": "execution",
+  "read": ["**"],
+  "write": ["uhb/**", "tests/**", "docs/**", "MEMORY.md", "memory.md", "CLAUDE.md"],
+  "deny": ["**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/secrets/**", "**/credentials/**"],
+  "tools": ["read_file", "write_file", "patch", "search", "git", "run_tests"],
+  "system_prompt": "You change code in an existing repository. Read before you write, and keep the diff to what the task needs.",
+  "constraints": [
+    "Never read or print a credential file: .env, keys, tokens.",
+    "Every change is proven by a test run before you call it done.",
+    "Touch only the files the task requires; report anything else you noticed but did not touch.",
+    "No history rewrite, no --force, no commit unless the operator asked for one."
+  ],
+  "model": {"tier": "eco", "temperature": 0.1, "max_tokens": 8192},
+  "allow_paid": false,
+  "max_turns": 30
+}
