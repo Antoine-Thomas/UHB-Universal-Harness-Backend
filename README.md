@@ -97,6 +97,8 @@ existing control planes — and testable without a UI.
 | [ADAPTERS.md](ADAPTERS.md) | measured state of each product, with evidence |
 | [NON-GOALS.md](NON-GOALS.md) | what UHB refuses to do, and why |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | how to propose an adapter or a spec change |
+| [docs/reference-implementation.md](docs/reference-implementation.md) | how the Hermes adapter will be built, function by function |
+| [docs/adapter-design-guidelines.md](docs/adapter-design-guidelines.md) | rules every adapter must follow |
 
 ## Adopters
 
