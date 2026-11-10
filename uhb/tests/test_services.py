@@ -52,6 +52,10 @@ def test_sha256sums_parsing_tolerates_star_and_noise():
 
 def test_mari_defaults_to_the_bridge_that_ships_here(monkeypatch):
     monkeypatch.setattr(install.shutil, "which", lambda name: "dotnet")
+    if not (install.MARI_FRAMEWORK / "src" / "Frameworks").is_dir():
+        # Cloned without --recurse-submodules: the next test covers exactly that case,
+        # and the build would be impossible here anyway.
+        pytest.skip("MARI framework submodule not initialised")
 
     steps = install.plan_mari()
 
