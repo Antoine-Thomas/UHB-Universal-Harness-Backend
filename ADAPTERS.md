@@ -3,6 +3,10 @@
 ![Status](https://img.shields.io/badge/status-v0.1%20draft-yellow)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+<!-- Budget: 270 lines, inside the revised 200-300 range (G.2). The original
+     150-200 target predates the DeepSeek Harness section, which accounts for
+     39 of these lines. No measured finding was removed to fit the old number. -->
+
 One note per known control plane: what the product really offers, through which
 door an external backend enters, what the adapter must supply, the effort and the
 risk.
