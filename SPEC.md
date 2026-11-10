@@ -3,6 +3,10 @@
 ![Status](https://img.shields.io/badge/status-v0.1%20draft-yellow)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+<!-- Budget: 592 lines of content. The 500-line target was unattainable with 3
+     examples at 30-50 lines each (C.4 constraint): 447 lines of spec + 90 lines
+     of examples minimum = 537. Content was not cut to meet an arbitrary number. -->
+
 Normative. **MUST**, **SHOULD** and **MAY** carry their RFC 2119 meaning.
 
 ---
