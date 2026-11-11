@@ -4,6 +4,15 @@ This is the shape UHB takes for a control plane that only knows how to call an
 API — OpenClaw's CLI backend can point here, and so can any product that sets a
 base URL. Loopback only by default: a translator is an execution surface, and
 ``0.0.0.0`` is a mistake, not a convenience.
+
+Loopback is not a boundary against the browser. Any page the user has open can
+POST to ``127.0.0.1`` without a preflight (a ``text/plain`` body is a simple
+request), so a turn could be spent on someone else's page: the response stays
+unreadable cross-origin, the tokens do not. Two checks close that: a POST whose
+``Origin`` is neither loopback nor ``null`` is refused with 403, and a POST whose
+``Content-Type`` is not ``application/json`` is refused with 415. A request with
+no ``Origin`` at all is a non-browser client — curl, a harness — and is allowed,
+because the policy is loopback-first, not browser-first.
 """
 
 from __future__ import annotations
@@ -144,15 +153,27 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self) -> None:
+        path = self.path.rstrip("/")
+        if path not in ("/v1/chat/completions", "/v1/messages"):
+            self._json(404, {"error": {"message": "not found", "type": "not_found"}})
+            return
+        # Refuse before reading a byte of the body: a foreign page cannot spend
+        # the operator's tokens, and a non-JSON POST is not a client we serve.
+        if self._origin_refused():
+            self._json(403, {"error": {"message": "cross-origin POST refused",
+                                       "type": "forbidden"}})
+            return
+        if not self._is_json():
+            self._json(415, {"error": {"message": "Content-Type must be application/json",
+                                       "type": "unsupported_media_type"}})
+            return
         payload = self._body()
         if payload is None:
             return
-        if self.path.rstrip("/") == "/v1/chat/completions":
+        if path == "/v1/chat/completions":
             self._openai(payload)
-        elif self.path.rstrip("/") == "/v1/messages":
-            self._anthropic(payload)
         else:
-            self._json(404, {"error": {"message": "not found", "type": "not_found"}})
+            self._anthropic(payload)
 
     # -- providers ------------------------------------------------------------
 
@@ -238,6 +259,23 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, json.JSONDecodeError):
             self._json(400, {"error": {"message": "invalid JSON body", "type": "invalid_request"}})
             return None
+
+    def _origin_refused(self) -> bool:
+        """A POST from a foreign page is refused; no Origin header means a client.
+
+        Browsers send ``Origin`` on every cross-origin POST, including the
+        ``text/plain`` simple requests that skip the preflight. curl, a harness
+        and an SDK send none — they are the intended callers.
+        """
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return False
+        return origin != "null" and not LOOPBACK_ORIGIN.match(origin)
+
+    def _is_json(self) -> bool:
+        """``application/json`` optionally followed by parameters; nothing else."""
+        media = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        return media == "application/json"
 
     def _cors_origin(self) -> str:
         """Echo the Origin only when it is local. Never `*`: `/status` is readable
