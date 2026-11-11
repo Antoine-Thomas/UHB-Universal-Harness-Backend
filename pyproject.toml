@@ -20,6 +20,7 @@ keywords = ["agents", "harness", "router", "llm", "control-plane", "wiki"]
 classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Operating System :: OS Independent",
 ]
 # httpx is the only runtime dependency: one HTTP client, used for provider calls.
