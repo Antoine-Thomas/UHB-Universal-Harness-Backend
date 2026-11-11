@@ -316,6 +316,20 @@ pass on every supported platform; the CI matrix on `ubuntu-latest`,
 Four security greps run before every commit, on every touched file: no key prefix,
 no credential value, no absolute path, no environment dump. Current result: 0.
 
+## Development conventions
+
+Three rules the CI enforces, so contributors do not have to guess:
+
+- **No test counts in prose.** The CI matrix is the source of truth for
+  pass/skip figures; a hardcoded number goes stale on the first PR.
+- **Multi-OS CI on every PR.** The suite runs on `ubuntu-latest`,
+  `macos-latest` and `windows-latest` with Python 3.11-3.13 (see
+  `.github/workflows/ci.yml`). Merge only after 9/9 green, macOS included.
+- **Resolve Windows shims before spawning.** Before
+  `asyncio.create_subprocess_exec`, resolve `argv[0]` with `shutil.which()`:
+  a pip-installed `.cmd` shim is invisible otherwise. Keep `shell=True` off.
+  Motif landed in commit `b1b2465`.
+
 ## Licence
 
 Two licences, one per layer — the split is deliberate, and the boundary is the
