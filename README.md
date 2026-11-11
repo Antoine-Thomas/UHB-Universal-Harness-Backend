@@ -299,9 +299,11 @@ gate belongs nowhere near an interactive path.
 
 ## Tests
 
-`pytest uhb/tests -q` — **197 passed, 1 skipped**, in 3.8 s, no network: the model
-is injected, git is injected, and the one end-to-end test is opt-in against a local
-Ollama (`UHB_OLLAMA_E2E=1`).
+`pytest uhb/tests -q` — **223 passed, 2 skipped**, in about 5 s, no network: the
+model is injected, git is injected, and both skips depend on the machine, not on
+the code — one end-to-end test is opt-in against a local Ollama
+(`UHB_OLLAMA_E2E=1`), the other skips while the MARI framework submodule is not
+initialised (`git submodule update --init`).
 
 Four security greps run before every commit, on every touched file: no key prefix,
 no credential value, no absolute path, no environment dump. Current result: 0.
