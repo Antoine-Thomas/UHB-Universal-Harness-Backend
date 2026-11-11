@@ -170,6 +170,12 @@ the RAG dependencies, and the MARI bridge built from `uhb/services/mari/bridge`.
 
 Requires Python 3.11+. Nothing else (httpx is the only runtime dependency).
 
+UHB runs on the three major operating systems: Windows 10 and 11 (cmd,
+PowerShell, Windows Terminal), macOS (Intel and Apple Silicon), and Linux
+and Unix (all major distributions). CI runs the full test suite on
+`ubuntu-latest`, `macos-latest` and `windows-latest` with Python 3.11, 3.12
+and 3.13 (see `.github/workflows/ci.yml`).
+
 ```bash
 pip install uhb-harness          # the CLI + the panel + the embedded manual
 pip install "uhb-harness[yaml]"  # additionally enables `uhb config set`
@@ -299,11 +305,13 @@ gate belongs nowhere near an interactive path.
 
 ## Tests
 
-`pytest uhb/tests -q` — **223 passed, 2 skipped**, in about 5 s, no network: the
-model is injected, git is injected, and both skips depend on the machine, not on
-the code — one end-to-end test is opt-in against a local Ollama
-(`UHB_OLLAMA_E2E=1`), the other skips while the MARI framework submodule is not
-initialised (`git submodule update --init`).
+`pytest uhb/tests -q` — no network: the model is injected, git is injected, and
+the skips depend on the machine, not on the code — one end-to-end test is opt-in
+against a local Ollama (`UHB_OLLAMA_E2E=1`), the other skips while the MARI
+framework submodule is not initialised (`git submodule update --init`). All tests
+pass on every supported platform; the CI matrix on `ubuntu-latest`,
+`macos-latest` and `windows-latest` (Python 3.11-3.13) is the source of truth
+(see `.github/workflows/ci.yml`).
 
 Four security greps run before every commit, on every touched file: no key prefix,
 no credential value, no absolute path, no environment dump. Current result: 0.
