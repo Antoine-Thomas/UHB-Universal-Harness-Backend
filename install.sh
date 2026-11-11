@@ -14,6 +14,7 @@
 #   ./install.sh --with-yaml         # also install pyyaml (needed by `uhb config set`)
 #   ./install.sh --with-services     # + SiYuan, downloaded and sha256-verified (~240 MB)
 #   ./install.sh --full              # + SiYuan, RAG dependencies (~1.5 GB) and the MARI bridge
+#   ./install.sh --python PATH       # interpreter to build .venv with (same as $PYTHON)
 #   ./install.sh --dry-run           # print the commands, change nothing
 #   ./install.sh --help
 
@@ -31,15 +32,22 @@ usage() {
   exit 0
 }
 
-for arg in "$@"; do
-  case "$arg" in
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --with-yaml) EXTRA="[yaml]" ;;
     --with-services) WITH_SERVICES=1 ;;
     --full) WITH_SERVICES=1 ; FULL_STACK=1 ;;
+    --python)
+      shift
+      if [ $# -eq 0 ]; then echo "error: --python needs a path (try --help)" >&2 ; exit 2 ; fi
+      PYTHON="$1"
+      ;;
+    --python=*) PYTHON="${1#--python=}" ;;
     -h|--help) usage ;;
-    *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
+    *) echo "unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
+  shift
 done
 
 say() { printf '%s\n' "$*"; }
@@ -65,7 +73,33 @@ fi
 
 say "UHB installer — $("$PYTHON" --version 2>&1)"
 
+# A version is not enough: a venv built from another venv inherits its broken
+# pip, and the failure surfaces much later as "No module named pip". Ask the
+# interpreter to prove it can install before creating anything.
+if ! "$PYTHON" -m pip --version >/dev/null 2>&1; then
+  if ! "$PYTHON" -m ensurepip --version >/dev/null 2>&1; then
+    RESOLVED="$(command -v "$PYTHON" 2>/dev/null || printf '%s' "$PYTHON")"
+    say "error: $("$PYTHON" --version 2>&1) at $RESOLVED cannot install packages: no pip, no ensurepip." >&2
+    say "       a venv created by this script would be born broken." >&2
+    say "       pass a standalone interpreter, for example:" >&2
+    say "         py -3.11 -V                  (Windows launcher)" >&2
+    say "         where.exe python3.11         (Windows)" >&2
+    say "         /usr/bin/python3.11          (Unix)" >&2
+    say "       then: PYTHON=<that path> ./install.sh   (or --python <that path>)" >&2
+    exit 1
+  fi
+fi
+
 # --- 2. virtual environment ----------------------------------------------
+# A git worktree without pyproject.toml is an earlier commit, not a package
+# source: installing from the remote there would run code the operator never
+# checked out and report success for it. Refuse before creating anything.
+if [ ! -f pyproject.toml ] && git rev-parse --git-dir >/dev/null 2>&1; then
+  say "error: stale checkout: HEAD $(git rev-parse --short HEAD 2>/dev/null || echo unknown) has no pyproject.toml — run" >&2
+  say "       git merge --ff-only origin/main, then re-run" >&2
+  exit 1
+fi
+
 if [ ! -d "$VENV_DIR" ]; then
   run "$PYTHON" -m venv "$VENV_DIR"
 else
