@@ -461,7 +461,20 @@ def _update(args: argparse.Namespace) -> int:
 # --- dispatch --------------------------------------------------------------
 
 
+def _ensure_utf8_streams() -> None:
+    """Windows consoles default to cp1252/cp850: an arrow or an accent in a
+    message would raise UnicodeEncodeError. Keep the console alive instead."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except (OSError, ValueError):
+                pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _ensure_utf8_streams()
     args = build_parser().parse_args(argv)
     try:
         if args.command == "status":

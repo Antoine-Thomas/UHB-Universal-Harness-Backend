@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 from pathlib import Path
 from typing import AsyncIterable, Sequence
 
@@ -67,9 +68,17 @@ class HermesAdapter(UHBAdapter):
         self, prompt: str, context: TaskContext
     ) -> AsyncIterable[StreamEvent]:
         argv = self._argv(prompt, context)
+        # pip installs the entry point as a ``hermes.cmd`` shim on Windows, and
+        # create_subprocess_exec does not apply PATHEXT the way a shell does:
+        # the bare name raises FileNotFoundError. Resolve it ourselves; when
+        # ``which`` finds nothing, keep the old name so the error stays the
+        # same "binary not found" event. shell=True stays off either way: the
+        # prompt is an argument, never part of a command line.
+        resolved = shutil.which(argv[0]) or argv[0]
         try:
             proc = await asyncio.create_subprocess_exec(
-                *argv,
+                resolved,
+                *argv[1:],
                 cwd=context.workspace or None,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
