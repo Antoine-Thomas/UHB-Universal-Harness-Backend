@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
@@ -53,7 +53,9 @@ class MemoryRouteError(RuntimeError):
 
 
 def _iso(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp, tz=UTC).isoformat(timespec="seconds")
+    # timezone.utc, not datetime.UTC: the alias only exists from 3.11, and
+    # `uh web` starts UHB with its own interpreter.
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat(timespec="seconds")
 
 
 def _count_lines(path: Path) -> int | None:
