@@ -28,6 +28,7 @@ import re
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from .. import __version__
 from ..adapters.hermes import HermesAdapter
@@ -43,6 +44,7 @@ from ..hub.router import (
     route,
     select_model,
 )
+from . import memory_routes
 from .panel import manual_path, status_payload
 from .panel import render as render_panel
 from .status import providers_facts
@@ -52,7 +54,7 @@ DEFAULT_PORT = 8101
 
 #: POST routes. They share the visitor checks (Origin, Content-Type) and
 #: nothing else: `/route` plans a turn, it does not run one.
-POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route")
+POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex")
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -139,6 +141,26 @@ class Handler(BaseHTTPRequestHandler):
                 modes=sorted(load_modes()),
             ))
             return
+        if path == "/rag/status":
+            # What is on disk, and whether the separate RAG service is up. No
+            # index is ever built here: it is compiled from the operator's notes.
+            self._json(200, memory_routes.rag_status())
+            return
+        if path == "/siyuan/blocks":
+            query = parse_qs(urlparse(self.path).query)
+            limit = (query.get("limit") or [str(memory_routes.DEFAULT_BLOCKS)])[0]
+            wanted = (query.get("path") or [""])[0]
+            try:
+                payload = memory_routes.siyuan_blocks(limit=int(limit), path=wanted)
+            except ValueError:
+                self._json(400, {"error": {"message": "limit must be an integer",
+                                           "type": "invalid_request"}})
+                return
+            except memory_routes.MemoryRouteError as exc:
+                self._json(exc.status, {"error": {"message": str(exc), "type": "memory"}})
+                return
+            self._json(200, payload)
+            return
         if path == "/docs/manuel.pdf":
             self._manual("fr")
             return
@@ -195,10 +217,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/route":
             self._plan(payload)
+        elif path == "/rag/reindex":
+            self._rag_reindex(payload)
         elif path == "/v1/chat/completions":
             self._openai(payload)
         else:
             self._anthropic(payload)
+
+    def _rag_reindex(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /rag/reindex``: ask the RAG service to reload its index.
+
+        The name comes from the client's intent; the body says what happened.
+        There is no index builder in this repository, so a reindex from scratch
+        would have nothing to run - see ``uhb/services/rag/README.md``.
+        """
+        service = str(payload.get("service_url") or memory_routes.RAG_SERVICE_URL)
+        try:
+            result = memory_routes.rag_reload(service_url=service)
+        except memory_routes.MemoryRouteError as exc:
+            self._json(exc.status, {"error": {"message": str(exc), "type": "memory"}})
+            return
+        self._json(200, result)
 
     # -- planning -------------------------------------------------------------
 
