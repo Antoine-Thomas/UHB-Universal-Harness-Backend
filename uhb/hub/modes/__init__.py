@@ -66,6 +66,15 @@ class ModesError(RuntimeError):
 class UnknownMode(ModesError, KeyError):
     """No profile carries that name."""
 
+    def __str__(self) -> str:
+        """The message as written, not KeyError's repr-of-the-key wrapper.
+
+        ``KeyError`` renders ``str(exc)`` as ``"'unknown mode ...'"``; this text
+        is served to clients (``POST /route``) and a doubled quote reads like a
+        formatting bug at the other end.
+        """
+        return str(self.args[0]) if self.args else ""
+
 
 class InvalidModeConfig(ModesError, ValueError):
     """A profile is malformed. The message names the file and the key."""
