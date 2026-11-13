@@ -125,7 +125,9 @@ def test_route_rejects_an_unknown_complexity(server):
 def test_route_names_the_known_modes_on_a_typo(server):
     status, data = _call(server, "POST", "/route", {"prompt": "x", "mode": "nope"}, JSON)
     assert status == 400
-    assert "known modes" in data["error"]["message"]
+    message = data["error"]["message"]
+    assert "known modes" in message
+    assert not message.startswith('"'), "KeyError must not wrap the message in quotes"
 
 
 def test_route_needs_a_prompt(server):
