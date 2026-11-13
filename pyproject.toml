@@ -9,7 +9,7 @@ name = "uhb-harness"
 dynamic = ["version"]
 description = "Universal Harness Backend: execution modes, intent routing and a compiled wiki for any agent harness."
 readme = "uhb/README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 # The specification is MIT (LICENSE); the implementation under uhb/ is Fair
 # Source (LICENSE-IMPLEMENTATION.md). This distribution ships the implementation.
 # PEP 639 form: a plain SPDX expression, plus the two files.
