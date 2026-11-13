@@ -5,6 +5,11 @@ API — OpenClaw's CLI backend can point here, and so can any product that sets 
 base URL. Loopback only by default: a translator is an execution surface, and
 ``0.0.0.0`` is a mistake, not a convenience.
 
+Two routes let a client decide *before* it spends: ``GET /modes`` says what each
+mode may read, write and call, and ``POST /route`` returns the plan — the chain
+of models and the reason for it — without running a turn. Neither touches an
+adapter, so both are safe to call on every keystroke.
+
 Loopback is not a boundary against the browser. Any page the user has open can
 POST to ``127.0.0.1`` without a preflight (a ``text/plain`` body is a simple
 request), so a turn could be spent on someone else's page: the response stays
@@ -30,13 +35,24 @@ from ..core.executor import Executor
 from ..core.health import Health
 from ..core.router import Router
 from ..core.types import StreamEvent, TaskContext
-from ..hub.modes import UnknownMode, get_mode, load_modes
-from ..hub.router import select_model
-from .panel import manual_path, render as render_panel, status_payload
+from ..hub.modes import ModesError, UnknownMode, get_mode, load_modes
+from ..hub.router import (
+    COMPLEXITIES,
+    InvalidCatalog,
+    UnroutableRequest,
+    route,
+    select_model,
+)
+from .panel import manual_path, status_payload
+from .panel import render as render_panel
 from .status import providers_facts
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8101
+
+#: POST routes. They share the visitor checks (Origin, Content-Type) and
+#: nothing else: `/route` plans a turn, it does not run one.
+POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route")
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -101,6 +117,13 @@ class Handler(BaseHTTPRequestHandler):
                 {"id": name, "object": "model"} for name in sorted(router.providers)
             ]})
             return
+        if path == "/modes":
+            # Permissions, not prose: a client must know what a mode may read,
+            # write and call before it picks one. `source` is never exposed - it
+            # is a filesystem path, and to_dict() already leaves it out.
+            modes = [spec.to_dict() for _name, spec in sorted(load_modes().items())]
+            self._json(200, {"modes": modes, "count": len(modes)})
+            return
         if path in ("/", "/index.html"):
             self._html(200, render_panel(
                 version=__version__, mode=self.mode,
@@ -154,7 +177,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.rstrip("/")
-        if path not in ("/v1/chat/completions", "/v1/messages"):
+        if path not in POST_ROUTES:
             self._json(404, {"error": {"message": "not found", "type": "not_found"}})
             return
         # Refuse before reading a byte of the body: a foreign page cannot spend
@@ -170,10 +193,53 @@ class Handler(BaseHTTPRequestHandler):
         payload = self._body()
         if payload is None:
             return
-        if path == "/v1/chat/completions":
+        if path == "/route":
+            self._plan(payload)
+        elif path == "/v1/chat/completions":
             self._openai(payload)
         else:
             self._anthropic(payload)
+
+    # -- planning -------------------------------------------------------------
+
+    def _plan(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /route``: the plan, without running the turn.
+
+        No adapter, no network, no token: ``route()`` classifies the prompt and
+        reads the local catalog. The body is ``{"prompt": "...", "mode": "...",
+        "complexity": "..."}``; the mode falls back to the envelope this instance
+        serves (a server started with ``--mode chat`` plans for chat), and a
+        forced complexity skips classification. The response is
+        ``RouteDecision.to_dict()`` - complexity, score, signals, the ordered
+        chain and the reason - so a caller can show what would be spent before
+        spending it.
+        """
+        prompt = payload.get("prompt")
+        if not isinstance(prompt, str) or not prompt.strip():
+            self._json(400, {"error": {"message": "prompt must be a non-empty string",
+                                       "type": "invalid_request_error"}})
+            return
+        forced = str(payload.get("complexity") or "").strip()
+        if forced and forced not in COMPLEXITIES:
+            self._json(400, {"error": {
+                "message": f"unknown complexity {forced!r}; expected one of "
+                           f"{', '.join(COMPLEXITIES)}",
+                "type": "invalid_request_error"}})
+            return
+        mode_name = str(payload.get("mode") or self.mode or "").strip()
+        try:
+            decision = route(prompt, mode_name, complexity=forced or None)
+        except UnknownMode as exc:  # the caller named a mode that does not exist
+            self._json(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
+            return
+        except UnroutableRequest as exc:  # well-formed, but no model may serve it
+            self._json(409, {"error": {"message": str(exc), "type": "unroutable"}})
+            return
+        except (InvalidCatalog, ModesError) as exc:  # the installation, not the caller
+            self._json(500, {"error": {"message": f"mode catalog is not usable: {exc}",
+                                       "type": "configuration_error"}})
+            return
+        self._json(200, decision.to_dict())
 
     # -- providers ------------------------------------------------------------
 
