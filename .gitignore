@@ -34,3 +34,7 @@ build/
 out/
 *.log
 *.tmp
+docs/reflection/
+
+# Runtime artefact of docker-compose.yml (the SiYuan workspace)
+uhb/data/

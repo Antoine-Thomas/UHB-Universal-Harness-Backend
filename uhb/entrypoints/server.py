@@ -231,7 +231,7 @@ class Handler(BaseHTTPRequestHandler):
         There is no index builder in this repository, so a reindex from scratch
         would have nothing to run - see ``uhb/services/rag/README.md``.
         """
-        service = str(payload.get("service_url") or memory_routes.RAG_SERVICE_URL)
+        service = str(payload.get("service_url") or memory_routes.rag_service_url())
         try:
             result = memory_routes.rag_reload(service_url=service)
         except memory_routes.MemoryRouteError as exc:

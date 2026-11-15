@@ -11,8 +11,23 @@ search engine: faiss index + lexical rerank + flashrank).
 | **Not shipped** | `index.faiss`, `chunks.jsonl`, `manifeste.json` — they are built from **your** notes, and they are the second brain, not the software |
 
 That distinction is the point: a fresh clone starts with an **empty** brain. `GET /sante`
-then answers `fragments: 0`, and `/search` returns nothing. UHB reports that honestly
-(`uhb brain status` → `0 fragments`), it does not invent results.
+then answers `fragments: 0` and `status: "sans_index"`, and `POST /search` answers 503 —
+never an empty result set, which would read as "your brain contains nothing". UHB reports
+that honestly (`uhb brain status` → `0 fragments`), it does not invent results.
+
+The service **starts** without an index: `docker compose up -d rag` is a working service
+with an empty brain, not a crash loop.
+
+## In a container
+
+`127.0.0.1` inside a container is that container. Two addresses therefore come from the
+environment, and `docker-compose.yml` sets both:
+
+| Variable | Who reads it | Compose value |
+| --- | --- | --- |
+| `UHB_RAG_URL` | UHB's `/rag/status` and `/rag/reindex` | `http://rag:8200` |
+| `SIYUAN_URL` | UHB's `/siyuan/blocks` | `http://siyuan:6806` |
+| `SIYUAN_TOKEN` | UHB's `/siyuan/blocks`, as an `Authorization: Token …` header | `${SIYUAN_AUTH_CODE:-}` |
 
 ## Install
 

@@ -142,3 +142,60 @@ def test_the_docker_table_declares_the_free_providers(docker: Router):
     for provider in ("nous", "openrouter"):
         assert provider in docker.providers
         assert docker.providers[provider]["api_key_env"] == f"{provider.upper()}_API_KEY"
+
+
+# --- the image itself ------------------------------------------------------
+
+
+def test_the_image_installs_the_yaml_extra() -> None:
+    """Measured: `pip install .` shipped an image that died on `import yaml`.
+
+    `UHB_CONFIG` points at the mounted YAML file, so PyYAML is not optional in
+    the container: the first boot raised ModuleNotFoundError inside
+    `Router.from_config`, before any route existed.
+    """
+    dockerfile = Path(__file__).resolve().parents[2] / "docker" / "Dockerfile.uhb"
+    installs = [line for line in dockerfile.read_text(encoding="utf-8").splitlines()
+                if "pip install" in line]
+
+    assert installs, "the image must install the package"
+    assert any("[yaml]" in line for line in installs)
+
+
+# --- what /status says about the container's table -------------------------
+
+
+def test_the_container_reports_its_local_ollama_as_local(docker: Router) -> None:
+    """Measured: `/status` said `local: false` for host.docker.internal.
+
+    The flag decides the widget's dot and `is_paid`; reading only the URL made
+    one say "remote, no key" and the other "free" about the same provider.
+    """
+    from uhb.entrypoints.status import providers_facts
+
+    rows = {row["name"]: row for row in providers_facts(docker)}
+
+    assert rows["ollama"]["local"] is True
+    assert rows["ollama"]["models"] == ["qwen3:8b"]
+    assert rows["deepseek"]["local"] is False
+    assert rows["deepseek"]["models"] == ["deepseek-flash"]
+
+
+def test_a_declared_local_provider_wins_over_a_non_loopback_url() -> None:
+    from uhb.entrypoints.status import providers_facts
+
+    router = Router.from_mapping(
+        {
+            "providers": {
+                "box": {
+                    "protocol": "openai",
+                    "base_url": "http://192.168.1.10:11434/v1",
+                    "api_key_env": "BOX_API_KEY",
+                    "local": True,
+                    "models": ["qwen3:8b"],
+                }
+            }
+        }
+    )
+
+    assert providers_facts(router)[0]["local"] is True
