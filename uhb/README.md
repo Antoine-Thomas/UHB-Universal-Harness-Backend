@@ -316,8 +316,17 @@ gate belongs nowhere near an interactive path.
 - ☑ 1.4 wiring: gate on every write path, router in the pipeline and entrypoints
 - ☑ 2 packaging: CLI, installer, this README
 - ☑ 2.1 free tier: six free candidates, `free_first`, and the `allow_paid` cost policy
-- ☐ 3 distribution: public release of the HUB (licence decision: MIT spec + Fair
-  Source implementation), then the adapters against the real products
+- ☑ 3.1 licence: MIT for the contract, FSL-1.1-MIT for the implementation — the
+  split is stated in the licence section below, including what a non-OSI licence
+  means for adopters
+- ☑ 3.2 proof: `docker compose` end to end (`docs/proof/docker-compose-e2e.md`)
+  and the `9+ UHB` widget in a real page (`docs/proof/widget-proof.md`)
+- ☐ 3.3 adapters: `harness_maxxing` and `openclaw` run against the real products.
+  Both are written against their documented interfaces — a launcher binary for
+  `MAXXING_CLAUDE_BIN`, a `CliBackendConfig` for `api.registerCliBackend` — and
+  neither has been driven by a live control plane yet
+- ☐ 3.4 release: 1.0.0 — `CHANGELOG.md` entry, version bump, tag, GitHub release,
+  PyPI upload (`docs/RELEASING.md` is the checklist)
 
 ## Tests
 
@@ -341,5 +350,22 @@ path:
 The contract is open so harnesses can adopt it without a legal conversation. The
 implementation is Fair Source so the work can be funded. Both texts ship inside
 the package: no one has to guess which one covers what.
+
+**FSL-1.1-MIT is source-available, not open source.** It is not an OSI-approved
+licence, and no wording here should be read as claiming it is. Concretely:
+
+- you may read, run, modify and use the implementation commercially, including in
+  a paid product;
+- what it forbids is offering it (or a derivative) as a competing hosted or
+  distributed service;
+- each released version converts to **MIT two years after its release date**,
+  automatically and version by version — not the project as a whole, and with
+  nothing to request;
+- `pyproject.toml` declares the SPDX identifier `FSL-1.1-MIT`, and package
+  indexes will list it as a non-OSI licence. That is the intended reading.
+
+The specification layer above (`SPEC.md`, `ARCHITECTURE.md`, `ADAPTERS.md`,
+`NON-GOALS.md`, `README.md`) is MIT and OSI-approved: the contract can be
+implemented in any product, with no time limit and no condition.
 
 Built by Thomas Leroyer (Searching Murphy).
