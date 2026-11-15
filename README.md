@@ -10,7 +10,7 @@ that refuses before it touches a file, and a compiled wiki that remembers.
 Harness Maxxing, OpenClaw, Hermes Agent or your own CLI plug into it — and stop
 caring which vendor's model their harness was written against.
 
-Status: **0.1.0** — wiki, modes, router and write gate are in service; this
+Status: **0.1.2** — wiki, modes, router and write gate are in service; this
 release adds the CLI, the panel, the embedded manual and the packaging. Every
 number below was measured on the reference machine and is reproducible with the
 command next to it.
@@ -84,6 +84,13 @@ payload — and the chain moves on to the next candidate.
 `free_first: true` on a profile (shipped on `chat`, `dev` and `review`) starts the
 chain at the `free` tier before the mode's own tier. `paid` stays governed by
 `allow_paid`: `free_first` reorders the chain, it never opens the paid tier.
+
+The provider table's `routing` block carries the same policy for the contract-level
+router: `fallback` names what answers when the chosen model cannot (one reference or
+a list, tried in order), and `allow_paid: false` refuses a billed model — a `:free`
+suffix, a loopback URL or a `local: true` provider are free — and routes to
+`fallback` instead. With nothing free left to try, `route_model` raises
+`PaidModelRefused` rather than spending quietly.
 
 ---
 
@@ -324,6 +331,7 @@ gate belongs nowhere near an interactive path.
 - ☑ 1.3 router: classification, tiered chain, fallback, measured latency
 - ☑ 1.4 wiring: gate on every write path, router in the pipeline and entrypoints
 - ☑ 2 packaging: CLI, installer, this README
+- ☑ 2.1 free tier: six free candidates, `free_first`, and the `allow_paid` cost policy
 - ☐ 3 distribution: public release of the HUB (licence decision: MIT spec + Fair
   Source implementation), then the adapters against the real products
 

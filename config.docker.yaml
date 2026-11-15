@@ -7,12 +7,39 @@ providers:
     base_url: http://host.docker.internal:11434/v1
     model: qwen3:8b
     local: true
+    # Kept for the shape: a local Ollama needs no key, but `resolve_provider`
+    # returns one descriptor for every provider and `has_credentials` checks it.
+    api_key_env: OLLAMA_API_KEY
   deepseek:
     protocol: openai
     base_url: https://api.deepseek.com/v1
     model: deepseek-flash
     api_key_env: DEEPSEEK_API_KEY
+  # The table must resolve every entry of `uhb/hub/router/catalog.json`:
+  # `load_catalog` refuses a route no provider can serve, so a container missing
+  # a provider would boot with no routing policy at all.
+  anthropic:
+    protocol: anthropic
+    base_url: https://api.anthropic.com
+    api_key_env: ANTHROPIC_API_KEY
+  openai:
+    protocol: openai
+    base_url: https://api.openai.com/v1
+    api_key_env: OPENAI_API_KEY
+  kimi:
+    protocol: openai
+    base_url: https://api.moonshot.cn/v1
+    api_key_env: KIMI_API_KEY
+  openrouter:
+    protocol: openai
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+  nous:
+    protocol: openai
+    base_url: https://inference-api.nousresearch.com/v1
+    api_key_env: NOUS_API_KEY
 routing:
   default: deepseek/deepseek-flash
   fallback: ollama/qwen3:8b
+  # A billed default is refused: the declared fallback (local Ollama) answers.
   allow_paid: false

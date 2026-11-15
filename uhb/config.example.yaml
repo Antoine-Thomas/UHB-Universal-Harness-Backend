@@ -50,8 +50,14 @@ providers:
 
 # Routing: intents in, model references out. First matching rule wins, and the
 # `default` is the fallback when nothing matches.
+#
+# `fallback` is what answers when the chosen model cannot: a reference, or a list
+# of them, tried in order. `allow_paid: false` refuses a billed model (`:free`
+# suffix or a loopback/`local: true` provider are free) and routes to `fallback`
+# instead — `route_model` raises `PaidModelRefused` if no free candidate exists.
 routing:
   default: deepseek/deepseek-v4-pro
+  allow_paid: true
   rules:
     - match: {capability: fast}
       model: deepseek/deepseek-flash

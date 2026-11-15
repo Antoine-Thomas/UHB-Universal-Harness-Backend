@@ -61,6 +61,32 @@ Adding a vendor means one entry in the provider table. Adding a model to the pol
 means one line in the catalog. A catalog entry no provider can serve is refused at
 load time — a route pointing nowhere is worse than no route.
 
+### 4. The free models and their quotas
+
+Six `free` candidates ship in the catalog, behind two OpenAI-compatible providers
+(`NOUS_API_KEY`, `OPENROUTER_API_KEY`):
+
+| Model | Provider | Context | Declared quota |
+| --- | --- | --- | --- |
+| `meituan/longcat-2.5:free` | `nous` | 1 048 576 | 20 RPM · 50 RPD |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | `openrouter` | 1 000 000 | 20 RPM · 50 RPD |
+| `recursive/flint-v1.0:free` | `openrouter` | 262 144 | 20 RPM · 50 RPD |
+| `upstage/solar-mini4:free` | `nous` | 524 288 | 20 RPM · 50 RPD |
+| `google/gemma-4-31b-it:free` | `openrouter` | 262 144 | 20 RPM · 50 RPD |
+| `stepfun/step-3.7-flash:free` | `nous` | 262 144 | 20 RPM · 50 RPD |
+
+`limits` is a policy ceiling, not a measurement: the provider advertises the real
+window per response in `x-ratelimit-*`, and a `429` is an ordinary failure that moves
+the chain to the next candidate.
+
+`free_first: true` on a profile (shipped on `chat`, `dev`, `review`) moves the `free`
+tier to the front of the chain; `paid` stays governed by `allow_paid`. The provider
+table's `routing` block carries the same policy for the contract-level router:
+`fallback` names what answers when the chosen model cannot, and `allow_paid: false`
+refuses a billed model — `:free` suffix, loopback URL or `local: true` provider are
+free — routing to `fallback` instead, or raising `PaidModelRefused` when nothing free
+is left.
+
 ---
 
 ## The CLI
@@ -289,6 +315,7 @@ gate belongs nowhere near an interactive path.
 - ☑ 1.3 router: classification, tiered chain, fallback, measured latency
 - ☑ 1.4 wiring: gate on every write path, router in the pipeline and entrypoints
 - ☑ 2 packaging: CLI, installer, this README
+- ☑ 2.1 free tier: six free candidates, `free_first`, and the `allow_paid` cost policy
 - ☐ 3 distribution: public release of the HUB (licence decision: MIT spec + Fair
   Source implementation), then the adapters against the real products
 

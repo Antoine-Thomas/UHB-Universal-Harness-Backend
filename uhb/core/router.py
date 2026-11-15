@@ -88,6 +88,14 @@ class UnknownModelRef(KeyError):
     """Raised when a model reference cannot be resolved to a provider."""
 
 
+class InvalidRouting(ValueError):
+    """The ``routing`` block is malformed: a bad type, or a fallback nothing serves."""
+
+
+class PaidModelRefused(RuntimeError):
+    """Every candidate that matches is billed, and the policy forbids paying."""
+
+
 class Router:
     """Config-driven model resolution. Deterministic for a given config."""
 
@@ -98,6 +106,15 @@ class Router:
     ) -> None:
         self.providers = dict(providers or DEFAULT_PROVIDERS)
         self.routing = dict(routing or DEFAULT_ROUTING)
+        self.fallbacks = _fallback_refs(self.routing.get("fallback"))
+        allow_paid = self.routing.get("allow_paid", True)
+        if not isinstance(allow_paid, bool):
+            raise InvalidRouting("'routing.allow_paid' must be true or false")
+        self.allow_paid = allow_paid
+        # A fallback nothing can serve is a plan that fails at 3 a.m.: refuse it
+        # at load, like the catalog does for a route pointing nowhere.
+        for ref in self.fallbacks:
+            self.resolve_provider(ref)
 
     # -- construction ---------------------------------------------------------
 
@@ -140,16 +157,63 @@ class Router:
         )
 
     def route_model(self, intent: dict[str, Any] | None = None) -> ModelRef:
-        """First matching rule wins; ``routing.default`` is the fallback."""
+        """First matching rule wins; ``routing.default`` is the fallback.
+
+        ``routing.allow_paid: false`` refuses a billed model: the declared
+        ``routing.fallback`` is used instead, and if it is billed too the call
+        raises :class:`PaidModelRefused` rather than quietly spending.
+        """
         intent = dict(intent or {})
         for rule in self.routing.get("rules", []):
             if _matches(rule.get("match") or {}, intent):
                 ref = rule.get("model")
                 if ref:
-                    return self._to_ref(ref)
-        return self._to_ref(self.routing["default"])
+                    return self._affordable(str(ref))
+        return self._affordable(str(self.routing["default"]))
+
+    def route_chain(self, intent: dict[str, Any] | None = None) -> tuple[ModelRef, ...]:
+        """The primary model followed by every declared fallback, de-duplicated."""
+        chain = [self.route_model(intent)]
+        for candidate in self.fallbacks:
+            if not self.allow_paid and self.is_paid(candidate):
+                continue
+            ref = self._to_ref(candidate)
+            if all(ref.ref != existing.ref for existing in chain):
+                chain.append(ref)
+        return tuple(chain)
+
+    def is_paid(self, model_ref: str) -> bool:
+        """Does reaching this model spend money?
+
+        Three declared signals, in this order: the provider carries ``local:
+        true`` (a container reaches the host's Ollama through
+        ``host.docker.internal``, which is not a loopback name), the base URL is
+        loopback, or the model id ends with ``:free``. Everything else is
+        billed — declared, never guessed from a price list.
+        """
+        provider, _, _model_id = str(model_ref).partition("/")
+        entry = self.providers.get(provider) or {}
+        if entry.get("local") is True:
+            return False
+        descriptor = self.resolve_provider(model_ref)
+        if any(name in descriptor.base_url for name in ("127.0.0.1", "localhost", "[::1]")):
+            return False
+        return not descriptor.model_id.endswith(":free")
 
     # -- helpers --------------------------------------------------------------
+
+    def _affordable(self, raw: str) -> ModelRef:
+        """``raw`` if the policy allows its cost, else the first free fallback."""
+        if self.allow_paid or not self.is_paid(raw):
+            return self._to_ref(raw)
+        for candidate in self.fallbacks:
+            if not self.is_paid(candidate):
+                return self._to_ref(candidate)
+        declared = ", ".join(self.fallbacks) or "(none)"
+        raise PaidModelRefused(
+            f"{raw!r} is billed and routing.allow_paid is false; "
+            f"declared fallbacks: {declared}. Set allow_paid: true to reach it"
+        )
 
     def _to_ref(self, raw: str) -> ModelRef:
         model_ref = ModelRef.parse(str(raw))
@@ -166,6 +230,19 @@ def _matches(match: dict[str, Any], intent: dict[str, Any]) -> bool:
         elif intent.get(key) != expected:
             return False
     return True
+
+
+def _fallback_refs(value: Any) -> tuple[str, ...]:
+    """``routing.fallback`` takes one reference or a list; normalise and reject junk."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        items = [value]
+    elif isinstance(value, (list, tuple)):
+        items = [str(item) for item in value]
+    else:
+        raise InvalidRouting("'routing.fallback' must be a model reference or a list of them")
+    return tuple(item.strip() for item in items if item.strip())
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
