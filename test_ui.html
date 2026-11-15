@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UHB — page de test du widget</title>
+<style>
+  /* Host page styles, deliberately distinctive: if the widget leaked a rule,
+     this page would show it. Nothing below targets a UHB selector. */
+  body { margin: 0; padding: 40px; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         background: #f6f8fa; color: #10151a; }
+  h1 { font-size: 22px; margin: 0 0 8px; }
+  p { max-width: 62ch; line-height: 1.55; color: #3b4753; }
+  code { background: #eef2f6; padding: 1px 5px; border-radius: 4px; }
+  .note { margin-top: 28px; padding: 14px 16px; background: #fff; border: 1px solid #e2e7ec;
+           border-radius: 10px; max-width: 62ch; font-size: 14px; }
+</style>
+</head>
+<body>
+<h1>Page de test — widget « 9+ UHB »</h1>
+<p>Cette page ne contient aucun style UHB : le bloc ci-dessous est le markup exact de
+<code>uhb ui --markup</code>, collé avant <code>&lt;/body&gt;</code>.
+Le point du bouton interroge <code>GET /status</code> au chargement.</p>
+
+<div class="note">
+  <strong>Lecture du point</strong><br>
+  vert <code>#1f9d55</code> = serveur joignable et au moins un fournisseur utilisable ·
+  orange <code>#d98324</code> = serveur joignable, aucune clé chargée ·
+  rouge <code>#c0392b</code> = serveur injoignable.<br>
+  Ajouter <code>?open=1</code> à l'URL clique le bouton au chargement, pour la capture
+  de la popup ouverte.
+</div>
+
+<style>
+  /* UHB widget — every rule is scoped; nothing leaks into the host page. */
+  .uhb-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+             background: #8a949c; margin-right: 6px; vertical-align: middle; }
+  .uhb-dot.uhb-ok { background: #1f9d55; }
+  .uhb-dot.uhb-warn { background: #d98324; }
+  .uhb-dot.uhb-bad { background: #c0392b; }
+
+  #uhb-badge, #uhb-modal { --uhb-ink: #10151a; --uhb-muted: #5b6772; --uhb-line: #e2e7ec;
+    --uhb-brand: #0b3d5c; --uhb-ok: #1f9d55; --uhb-warn: #d98324; --uhb-bad: #c0392b; }
+
+  #uhb-badge { position: fixed; right: 18px; bottom: 18px; z-index: 40;
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer;
+    background: #fff; color: var(--uhb-ink); border: 1px solid var(--uhb-line);
+    border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    box-shadow: 0 2px 10px rgba(16,21,26,.10); font-family: inherit; }
+  #uhb-badge:hover { border-color: #c9d3db; }
+  #uhb-badge:focus-visible { outline: 2px solid var(--uhb-brand); outline-offset: 2px; }
+
+  #uhb-modal[hidden] { display: none; }
+  #uhb-modal { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center;
+    background: rgba(16,21,26,.45); padding: 16px; }
+  #uhb-dialog { background: #fff; border-radius: 12px; width: 100%; max-width: 560px;
+    max-height: 86vh; overflow: auto; padding: 22px 24px 18px; color: var(--uhb-ink);
+    box-shadow: 0 18px 50px rgba(16,21,26,.28);
+    font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  #uhb-dialog h2 { margin: 0 0 2px; font-size: 18px; color: var(--uhb-brand); }
+  #uhb-dialog .uhb-hint { margin: 0 0 16px; color: var(--uhb-muted); font-size: 13px; }
+  #uhb-close { float: right; border: 0; background: none; font-size: 22px; line-height: 1;
+    cursor: pointer; color: var(--uhb-muted); padding: 2px 6px; }
+  #uhb-dialog ul.uhb-cmds { list-style: none; margin: 0 0 18px; padding: 0; }
+  #uhb-dialog ul.uhb-cmds li { display: grid; grid-template-columns: 1fr; gap: 2px;
+    padding: 7px 0; border-bottom: 1px solid var(--uhb-line); }
+  #uhb-dialog ul.uhb-cmds code { background: none; padding: 0; font-size: 13px;
+    color: var(--uhb-brand); }
+  #uhb-dialog ul.uhb-cmds span { color: var(--uhb-muted); font-size: 13px; }
+  #uhb-dialog .uhb-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+  #uhb-dialog a.uhb-btn { display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--uhb-brand); background: var(--uhb-brand); color: #fff;
+    border-radius: 8px; padding: 9px 14px; font-size: 14px; font-weight: 600;
+    text-decoration: none; cursor: pointer; font-family: inherit; }
+  #uhb-dialog a.uhb-btn.uhb-secondary { background: #fff; color: var(--uhb-brand); }
+  @media (max-width: 480px) { #uhb-dialog { padding: 18px 16px 14px; } }
+</style>
+
+<button id="uhb-badge" type="button" aria-haspopup="dialog" aria-controls="uhb-modal"
+        data-uhb-base="http://127.0.0.1:8101">
+  <span class="uhb-dot" id="uhb-dot"></span>9+ UHB
+</button>
+
+<div id="uhb-modal" hidden role="dialog" aria-modal="true" aria-labelledby="uhb-title">
+  <div id="uhb-dialog">
+    <button id="uhb-close" type="button" aria-label="Fermer">&times;</button>
+    <h2 id="uhb-title">UHB — 0.1.2</h2>
+    <p class="uhb-hint" id="uhb-state">…</p>
+
+    <ul class="uhb-cmds">
+      <li><code>uhb status</code><span>version, fournisseurs, politique, modes</span></li>
+      <li><code>uhb run --mode dev --port 8080</code><span>démarre ce serveur</span></li>
+      <li><code>uhb modes list</code><span>ce que chaque mode a le droit d'écrire</span></li>
+      <li><code>uhb config set routing.default deepseek/deepseek-flash</code><span>change le modèle</span></li>
+      <li><code>uhb brain status</code><span>RAG, SiYuan, MARI : en ligne ou non</span></li>
+      <li><code>uhb docs</code><span>chemin du manuel et URL</span></li>
+    </ul>
+
+    <div class="uhb-actions">
+      <a class="uhb-btn" data-uhb-path="/docs/manuel.pdf" href="/docs/manuel.pdf" download>Manuel d'utilisation (PDF)</a>
+      <a class="uhb-btn uhb-secondary" data-uhb-path="/docs/manual.pdf" href="/docs/manual.pdf" download>User manual (EN)</a>
+      <a class="uhb-btn uhb-secondary" data-uhb-path="/status" href="/status">État JSON</a>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var badge = document.getElementById("uhb-badge");
+  if (!badge) { return; }
+  var modal = document.getElementById("uhb-modal");
+  var close = document.getElementById("uhb-close");
+  var base = (badge.dataset.uhbBase || "").replace(/\/+$/, "");
+  var lastFocus = null;
+
+  // Download and JSON links follow the same base as the fetch: relative when the
+  // widget is served by UHB, absolute when it is pasted into a dashboard elsewhere.
+  document.querySelectorAll("[data-uhb-path]").forEach(function (link) {
+    link.setAttribute("href", base + link.dataset.uhbPath);
+  });
+
+  function paint(data) {
+    var providers = (data && data.providers) || [];
+    var ready = providers.some(function (p) { return p.key_loaded || p.local; });
+    var dot = document.getElementById("uhb-dot");
+    dot.className = "uhb-dot " + (data === null ? "uhb-bad" : ready ? "uhb-ok" : "uhb-warn");
+    document.getElementById("uhb-state").textContent = data === null
+      ? "UHB injoignable sur " + (base || location.origin)
+      : "Mode " + (data.mode || "?") + " · harness " + (data.harness || "?") +
+        " · " + providers.length + " fournisseur(s), " +
+        (ready ? "au moins un utilisable" : "aucune clé chargée");
+  }
+
+  function refresh() {
+    fetch(base + "/status", { headers: { "accept": "application/json" } })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(paint)
+      .catch(function () { paint(null); });
+  }
+
+  function open() {
+    lastFocus = document.activeElement;
+    modal.hidden = false;
+    close.focus();
+    refresh();
+  }
+  function shut() {
+    modal.hidden = true;
+    if (lastFocus) { lastFocus.focus(); }
+  }
+
+  badge.addEventListener("click", open);
+  close.addEventListener("click", shut);
+  modal.addEventListener("click", function (event) { if (event.target === modal) { shut(); } });
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && !modal.hidden) { shut(); }
+  });
+
+  refresh();
+})();
+</script>
+<script>
+// Opt-in auto-open, so a screenshot can show the popup without a human click.
+// It calls the widget's own click handler: the badge is a real button.
+if (new URLSearchParams(location.search).get("open") === "1") {
+  document.getElementById("uhb-badge").click();
+}
+</script>
+</body>
+</html>
