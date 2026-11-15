@@ -10,7 +10,7 @@ that refuses before it touches a file, and a compiled wiki that remembers.
 Harness Maxxing, OpenClaw, Hermes Agent or your own CLI plug into it — and stop
 caring which vendor's model their harness was written against.
 
-Status: **0.1.0** — wiki, modes, router and write gate are in service; this
+Status: **0.1.2** — wiki, modes, router and write gate are in service; this
 release adds the CLI, the panel, the embedded manual and the packaging. Every
 number below was measured on the reference machine and is reproducible with the
 command next to it.
