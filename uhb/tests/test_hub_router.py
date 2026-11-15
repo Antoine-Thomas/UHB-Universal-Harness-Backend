@@ -88,7 +88,11 @@ def test_forced_complexity_skips_classification():
 
     assert decision.complexity == "complex"
     assert decision.signals == {"forced": 1}
-    assert decision.chosen.ref == "deepseek/deepseek-v4-pro", "flash does not claim complex"
+    assert decision.chosen.tier == "free", "free_first: a free model answers before the paid tier"
+    assert decision.chosen.ref == "nous/meituan/longcat-2.5:free"
+    assert "deepseek/deepseek-flash" not in [c.ref for c in decision.candidates], (
+        "flash does not claim complex"
+    )
 
 
 def test_unknown_complexity_is_refused():
@@ -150,30 +154,38 @@ def test_broken_catalog_json_fails_loudly(tmp_path: Path):
 # --- planning --------------------------------------------------------------
 
 
-def test_a_trivial_chat_goes_to_the_cheap_eco_model_first():
+def test_a_trivial_chat_tries_the_free_tier_first():
     decision = route(TRIVIAL, "chat")
 
-    assert decision.chosen.ref == "deepseek/deepseek-flash"
+    assert decision.chosen.tier == "free"
+    assert decision.chosen.ref == "nous/meituan/longcat-2.5:free"
     assert [candidate.ref for candidate in decision.candidates] == [
+        "nous/meituan/longcat-2.5:free",
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+        "openrouter/recursive/flint-v1.0:free",
+        "nous/upstage/solar-mini4:free",
+        "openrouter/google/gemma-4-31b-it:free",
+        "nous/stepfun/step-3.7-flash:free",
+        "ollama/qwen3:8b",
         "deepseek/deepseek-flash",
         "deepseek/deepseek-v4-pro",
-        "ollama/qwen3:8b",
     ]
 
 
 def test_a_complex_review_drops_the_model_that_cannot_hold_it():
     decision = route(COMPLEX, "review")
 
-    assert decision.chosen.ref == "deepseek/deepseek-v4-pro"
+    assert decision.chosen.tier == "free"
+    assert decision.chosen.ref == "nous/meituan/longcat-2.5:free"
     assert "deepseek/deepseek-flash" not in [candidate.ref for candidate in decision.candidates]
 
 
 def test_observe_stays_on_the_free_tier():
     decision = route("Resume l'etat du disque.", "observe")
 
-    assert decision.chosen.ref == "ollama/qwen3:8b"
     assert decision.candidates[0].tier == "free"
     assert all(candidate.tier == "free" for candidate in decision.candidates)
+    assert len(decision.candidates) == 7, "six remote free models plus the local Ollama"
 
 
 def test_no_shipped_mode_can_reach_a_paid_model():
@@ -198,12 +210,14 @@ def test_a_mode_that_allows_paid_gets_it_in_the_chain():
     assert "anthropic/claude-sonnet-5" in [candidate.ref for candidate in complex_.candidates]
 
 
-def test_a_free_tier_mode_cannot_route_a_complex_request():
-    with pytest.raises(UnroutableRequest) as caught:
-        route(TRIVIAL, "observe", complexity="complex")
+def test_a_free_tier_mode_stays_free_even_for_a_complex_request():
+    decision = route(TRIVIAL, "observe", complexity="complex")
 
-    assert "allow_paid" in str(caught.value)
-    assert "observe" in str(caught.value)
+    assert all(candidate.tier == "free" for candidate in decision.candidates)
+    assert decision.chosen.ref == "nous/meituan/longcat-2.5:free"
+    assert "kimi/moonshot-v1-128k" not in [c.ref for c in decision.candidates], (
+        "paid stays unreachable: allow_paid is false"
+    )
 
 
 def test_routing_is_pure():
@@ -226,14 +240,15 @@ def test_the_hub_router_does_not_fork_the_provider_truth():
     descriptor = table.resolve_provider(chosen.ref)
 
     assert (chosen.base_url, chosen.api_key_env) == (descriptor.base_url, descriptor.api_key_env)
-    assert chosen.model_id == "deepseek-flash"
+    assert chosen.model_id == "meituan/longcat-2.5:free"
 
 
-def test_deepseek_flash_is_still_the_fast_capable_default():
-    """The HUB default and the contract default must name the same model."""
+def test_the_hub_and_the_contract_agree_when_a_mode_is_not_free_first():
+    """The contract default stays DeepSeek; free_first is an explicit mode choice."""
     table = Router()
+    plain = parse_mode({"name": "plain", "read": ["**"], "model": {"tier": "eco"}}, "plain.json")
     contract = table.route_model({"capability": "fast"})
-    hub = route(TRIVIAL, "dev").chosen
+    hub = route(TRIVIAL, plain).chosen
 
     assert contract.ref == "deepseek/deepseek-flash"
     assert hub.ref == contract.ref
@@ -243,7 +258,7 @@ def test_deepseek_flash_is_still_the_fast_capable_default():
 
 def test_the_contract_router_still_resolves_every_catalog_entry():
     table = Router()
-    for name in ("deepseek", "anthropic", "openai", "kimi", "ollama"):
+    for name in ("deepseek", "anthropic", "openai", "kimi", "ollama", "openrouter", "nous"):
         descriptor = table.resolve_provider(f"{name}/x")
         assert descriptor.base_url.startswith("http")
         assert descriptor.api_key_env.endswith("_KEY")
@@ -261,25 +276,25 @@ def test_the_first_candidate_answers_and_the_chain_stops():
 
     result = execute(route(STANDARD, "dev"), "summarise", sender=sender)
 
-    assert seen == ["deepseek/deepseek-flash"]
-    assert result.provider == "deepseek/deepseek-flash"
-    assert result.tier == "eco"
+    assert seen == ["nous/meituan/longcat-2.5:free"]
+    assert result.provider == "nous/meituan/longcat-2.5:free"
+    assert result.tier == "free"
     assert [attempt.outcome for attempt in result.attempts] == ["ok"]
 
 
 def test_a_failing_provider_falls_through_to_the_next():
     def sender(candidate, prompt, max_tokens):
-        if candidate.ref == "deepseek/deepseek-flash":
+        if candidate.ref == "nous/meituan/longcat-2.5:free":
             raise TimeoutError("provider did not answer")
         return "second answered"
 
     result = execute(route(STANDARD, "dev"), "summarise", sender=sender)
 
     assert result.text == "second answered"
-    assert result.provider == "deepseek/deepseek-v4-pro"
+    assert result.provider == "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free"
     assert [(attempt.provider, attempt.outcome) for attempt in result.attempts] == [
-        ("deepseek/deepseek-flash", "failed"),
-        ("deepseek/deepseek-v4-pro", "ok"),
+        ("nous/meituan/longcat-2.5:free", "failed"),
+        ("openrouter/nvidia/nemotron-3-ultra-550b-a55b:free", "ok"),
     ]
     assert result.attempts[0].detail == "TimeoutError", "the reason is the class, never a payload"
 
@@ -288,10 +303,11 @@ def test_when_everything_fails_it_raises_instead_of_inventing_an_answer():
     def sender(candidate, prompt, max_tokens):
         raise RuntimeError("down")
 
+    decision = route(STANDARD, "dev")
     with pytest.raises(AllProvidersFailed) as caught:
-        execute(route(STANDARD, "dev"), "summarise", sender=sender)
+        execute(decision, "summarise", sender=sender)
 
-    assert len(caught.value.attempts) == 3
+    assert len(caught.value.attempts) == len(decision.candidates)
     assert all(attempt.outcome == "failed" for attempt in caught.value.attempts)
 
 
@@ -309,8 +325,9 @@ def test_a_remote_provider_without_a_key_is_skipped_not_called(monkeypatch):
     result = execute(route(STANDARD, "dev"), "summarise")
 
     assert called == ["ollama/qwen3:8b"], "only the local provider may be called without a key"
-    assert [attempt.outcome for attempt in result.attempts] == ["skipped", "skipped", "ok"]
-    assert "DEEPSEEK_API_KEY" in result.attempts[0].detail
+    assert [attempt.outcome for attempt in result.attempts] == ["skipped"] * 6 + ["ok"]
+    assert result.attempts[0].provider == "nous/meituan/longcat-2.5:free"
+    assert result.attempts[0].detail == "no NOUS_API_KEY in the environment"
 
 
 def test_credentials_are_detected_by_name_only(monkeypatch):

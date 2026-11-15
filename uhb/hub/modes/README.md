@@ -5,15 +5,18 @@ model tier, turn budget. It is JSON, not code, so adding a mode is adding a file
 
 ## The four shipped modes
 
-| Mode | Reads | Writes | Tools | Tier |
-| --- | --- | --- | --- | --- |
-| `chat` | `wiki/**`, `raw/**` | nothing | read, search | eco |
-| `dev` | everything | `uhb/**`, `tests/**`, `docs/**`, harness memory files | read, write, patch, search, git, run_tests | eco |
-| `review` | everything | nothing | read, search, git_diff | eco |
-| `observe` | `wiki/**`, `logs/**`, `data/**`, `*.log` | `wiki/log.md`, `reports/**` | read, search, probe | free |
+| Mode | Reads | Writes | Tools | Tier | `free_first` |
+| --- | --- | --- | --- | --- | --- |
+| `chat` | `wiki/**`, `raw/**` | nothing | read, search | eco | yes |
+| `dev` | everything | `uhb/**`, `tests/**`, `docs/**`, harness memory files | read, write, patch, search, git, run_tests | eco | yes |
+| `review` | everything | nothing | read, search, git_diff | eco | yes |
+| `observe` | `wiki/**`, `logs/**`, `data/**`, `*.log` | `wiki/log.md`, `reports/**` | read, search, probe | free | no |
 
 All four ship with `allow_paid: false`: a paid model is a manual decision, never
 a default the router can reach on its own.
+
+`free_first` moves the `free` tier to the front of the chain for a mode that would
+otherwise start at `eco`. It never opens `paid`: that stays `allow_paid`'s call.
 
 ## Adding a mode
 
@@ -33,6 +36,7 @@ which overlays the shipped ones):
   "constraints": ["Every count comes with the command that produced it."],
   "model": {"tier": "eco", "temperature": 0.0, "max_tokens": 4096},
   "allow_paid": false,
+  "free_first": true,
   "max_turns": 3
 }
 ```

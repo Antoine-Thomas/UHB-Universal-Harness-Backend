@@ -146,6 +146,30 @@ chaîne vide qui ressemble à une réponse.
 `paid` n'est atteignable que si le mode porte `allow_paid: true`. Aucun profil livré ne
 l'autorise : un modèle cher reste une décision manuelle.
 
+### Les modèles gratuits et leurs quotas
+
+Six candidats `free` sont livrés, joignables par deux fournisseurs OpenAI-compatibles.
+Aucune clé n'est lue : le routeur transporte le **nom** de la variable, l'appelant résout
+la valeur au moment de l'appel.
+
+| Modèle | Fournisseur | Variable | Contexte | Quota déclaré |
+| --- | --- | --- | --- | --- |
+| `meituan/longcat-2.5:free` | `nous` | `NOUS_API_KEY` | 1 048 576 | 20 RPM · 50 RPD |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | `openrouter` | `OPENROUTER_API_KEY` | 1 000 000 | 20 RPM · 50 RPD |
+| `recursive/flint-v1.0:free` | `openrouter` | `OPENROUTER_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+| `upstage/solar-mini4:free` | `nous` | `NOUS_API_KEY` | 524 288 | 20 RPM · 50 RPD |
+| `google/gemma-4-31b-it:free` | `openrouter` | `OPENROUTER_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+| `stepfun/step-3.7-flash:free` | `nous` | `NOUS_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+
+Ces quotas sont des **plafonds de police** fixés par l'exploitant, pas des mesures : la
+fenêtre réelle est publiée par le fournisseur dans ses en-têtes `x-ratelimit-*` à chaque
+réponse. Un `429` est traité comme un échec ordinaire — consigné par classe d'exception,
+jamais par contenu — et la chaîne poursuit vers le candidat suivant.
+
+`free_first: true` sur un profil (livré sur `chat`, `dev` et `review`) fait démarrer la
+chaîne au palier `free` avant le palier propre au mode. `paid` reste soumis à `allow_paid` :
+`free_first` réordonne la chaîne, il n'ouvre jamais le palier payant.
+
 ---
 
 ## 6. Le wiki compilé

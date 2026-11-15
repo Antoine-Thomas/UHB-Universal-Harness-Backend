@@ -54,14 +54,15 @@ def _fresh():
 class Recorder:
     """A sender that records the candidate it was asked to call."""
 
-    def __init__(self, reply: str = "{}", fail: set[str] | None = None) -> None:
+    def __init__(self, reply: str = "{}", fail: set[str] | None = None, fail_all: bool = False) -> None:
         self.reply = reply
         self.fail = set(fail or ())
+        self.fail_all = fail_all
         self.candidates: list[str] = []
 
     def __call__(self, candidate, prompt: str, max_tokens: int) -> str:
         self.candidates.append(candidate.ref)
-        if candidate.ref in self.fail:
+        if self.fail_all or candidate.ref in self.fail:
             raise TimeoutError("provider did not answer")
         return self.reply
 
@@ -91,22 +92,22 @@ def add_source(repo: Path, text: str = "The HUB compiles sources into pages.") -
 # --- the seam --------------------------------------------------------------
 
 
-def test_routed_llm_sends_a_trivial_prompt_to_the_cheap_model():
+def test_routed_llm_sends_a_trivial_prompt_to_the_free_tier():
     recorder = Recorder(reply="ok")
 
     text = routed_llm("dev", sender=recorder)(TRIVIAL)
 
     assert text == "ok"
-    assert recorder.candidates == ["deepseek/deepseek-flash"]
+    assert recorder.candidates == ["nous/meituan/longcat-2.5:free"]
 
 
-def test_routed_llm_sends_a_complex_prompt_to_the_capable_model():
+def test_routed_llm_sends_a_complex_prompt_to_a_capable_free_model():
     recorder = Recorder(reply="ok")
 
     routed_llm("dev", sender=recorder)(COMPLEX)
 
-    assert recorder.candidates == ["deepseek/deepseek-v4-pro"], (
-        "flash does not claim 'complex': the capable model answers first"
+    assert recorder.candidates == ["nous/meituan/longcat-2.5:free"], (
+        "a free model claims 'complex': the paid tier is not reached"
     )
 
 
@@ -116,14 +117,14 @@ def test_select_model_prefers_an_explicit_choice_and_routes_otherwise():
 
 
 def test_routed_llm_falls_back_down_the_chain():
-    recorder = Recorder(reply="second", fail={"deepseek/deepseek-flash"})
+    recorder = Recorder(reply="second", fail={"nous/meituan/longcat-2.5:free"})
 
     text = routed_llm("dev", sender=recorder)(TRIVIAL)
 
     assert text == "second"
     assert recorder.candidates == [
-        "deepseek/deepseek-flash",
-        "deepseek/deepseek-v4-pro",
+        "nous/meituan/longcat-2.5:free",
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     ]
 
 
@@ -133,6 +134,8 @@ def test_routed_llm_falls_back_down_the_chain():
 def test_ingest_asks_the_router_and_honours_its_choice(repo: Path, monkeypatch):
     """With a mode and no injected LLM, the compile call goes through the router."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "placeholder-never-logged")
+    monkeypatch.setenv("NOUS_API_KEY", "placeholder-never-logged")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder-never-logged")
     recorder = Recorder(reply=json.dumps({"pages": [PAGE]}))
     monkeypatch.setattr("uhb.hub.router.default_sender", recorder)
     source = add_source(repo)
@@ -140,43 +143,41 @@ def test_ingest_asks_the_router_and_honours_its_choice(repo: Path, monkeypatch):
     result = ingest(source, workspace=wiki_root(repo), project=repo, mode="dev")
 
     assert result.pages_created == ["concepts/hub.md"]
-    assert recorder.candidates == ["deepseek/deepseek-flash"], (
-        "a compile is routed as a standard task: the cheap eco model answers first"
+    assert recorder.candidates == ["nous/meituan/longcat-2.5:free"], (
+        "a compile is routed as a standard task: the free tier answers first"
     )
     assert (wiki_root(repo) / "wiki" / "concepts" / "hub.md").is_file()
 
 
 def test_ingest_falls_back_to_the_next_model_when_the_first_fails(repo: Path, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "placeholder-never-logged")
-    recorder = Recorder(reply=json.dumps({"pages": [PAGE]}), fail={"deepseek/deepseek-flash"})
+    monkeypatch.setenv("NOUS_API_KEY", "placeholder-never-logged")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder-never-logged")
+    recorder = Recorder(reply=json.dumps({"pages": [PAGE]}), fail={"nous/meituan/longcat-2.5:free"})
     monkeypatch.setattr("uhb.hub.router.default_sender", recorder)
 
     result = ingest(add_source(repo), workspace=wiki_root(repo), project=repo, mode="dev")
 
     assert result.pages_created == ["concepts/hub.md"]
     assert recorder.candidates == [
-        "deepseek/deepseek-flash",
-        "deepseek/deepseek-v4-pro",
+        "nous/meituan/longcat-2.5:free",
+        "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
     ]
 
 
 def test_ingest_writes_nothing_when_every_candidate_fails(repo: Path, monkeypatch):
     """Fail-closed through the pipeline: a routed compile that fails leaves no page."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "placeholder-never-logged")
-    recorder = Recorder(
-        reply=json.dumps({"pages": [PAGE]}),
-        fail={
-            "deepseek/deepseek-flash",
-            "deepseek/deepseek-v4-pro",
-            "ollama/qwen3:8b",
-        },
-    )
+    monkeypatch.setenv("NOUS_API_KEY", "placeholder-never-logged")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder-never-logged")
+    recorder = Recorder(reply=json.dumps({"pages": [PAGE]}), fail_all=True)
     monkeypatch.setattr("uhb.hub.router.default_sender", recorder)
 
     with pytest.raises(AllProvidersFailed) as caught:
         ingest(add_source(repo), workspace=wiki_root(repo), project=repo, mode="dev")
 
-    assert [attempt.outcome for attempt in caught.value.attempts] == ["failed", "failed", "failed"]
+    assert recorder.candidates, "the chain was walked"
+    assert [attempt.outcome for attempt in caught.value.attempts] == ["failed"] * len(recorder.candidates)
     assert not (wiki_root(repo) / "wiki" / "concepts" / "hub.md").exists()
     assert "[[hub]]" not in (wiki_root(repo) / "wiki" / "index.md").read_text(encoding="utf-8")
 

@@ -49,6 +49,29 @@ DEFAULT_PROVIDERS: dict[str, dict[str, Any]] = {
         "api_key_env": "OLLAMA_API_KEY",
         "models": ["qwen3:8b", "llama3.3:70b"],
     },
+    # Two OpenAI-compatible aggregators. Neither key is read here: the router
+    # only ever carries the variable NAME, and the caller resolves it at call
+    # time (see ``default_sender``).
+    "openrouter": {
+        "protocol": "openai",
+        "base_url": "https://openrouter.ai/api/v1",
+        "api_key_env": "OPENROUTER_API_KEY",
+        "models": [
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "google/gemma-4-31b-it:free",
+            "recursive/flint-v1.0:free",
+        ],
+    },
+    "nous": {
+        "protocol": "openai",
+        "base_url": "https://inference-api.nousresearch.com/v1",
+        "api_key_env": "NOUS_API_KEY",
+        "models": [
+            "meituan/longcat-2.5:free",
+            "upstage/solar-mini4:free",
+            "stepfun/step-3.7-flash:free",
+        ],
+    },
 }
 
 DEFAULT_ROUTING: dict[str, Any] = {

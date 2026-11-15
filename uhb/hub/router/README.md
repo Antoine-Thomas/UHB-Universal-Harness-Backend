@@ -32,6 +32,29 @@ the policy means one line in the catalog.
 - if no model in the allowed tiers supports the complexity, `UnroutableRequest`
   says which tiers were allowed and that `allow_paid` would widen them
 
+## Free models and quotas
+
+The shipped catalog carries six `free` candidates behind two providers
+(`NOUS_API_KEY`, `OPENROUTER_API_KEY`). A free model is not a hidden route: it is
+a normal candidate that happens to cost nothing, declared like any other.
+
+| Model | Provider | Context | Declared quota |
+| --- | --- | --- | --- |
+| `meituan/longcat-2.5:free` | `nous` | 1 048 576 | 20 RPM · 50 RPD |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | `openrouter` | 1 000 000 | 20 RPM · 50 RPD |
+| `recursive/flint-v1.0:free` | `openrouter` | 262 144 | 20 RPM · 50 RPD |
+| `upstage/solar-mini4:free` | `nous` | 524 288 | 20 RPM · 50 RPD |
+| `google/gemma-4-31b-it:free` | `openrouter` | 262 144 | 20 RPM · 50 RPD |
+| `stepfun/step-3.7-flash:free` | `nous` | 262 144 | 20 RPM · 50 RPD |
+
+`limits` is a policy ceiling, not a measurement: the provider advertises the real
+window per response in `x-ratelimit-*`. A `429` is an ordinary failure — recorded
+by exception class, then skipped, and the chain continues.
+
+`free_first: true` on a profile moves the `free` tier to the front of the chain,
+before the mode's own tier. It is independent of `allow_paid`: reordering never
+opens the paid tier.
+
 ## Measured
 
 `route()` over 2000 calls: p50 0.013 ms, p95 0.020 ms, p99 0.026 ms, mean

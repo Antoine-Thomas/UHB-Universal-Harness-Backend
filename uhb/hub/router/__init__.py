@@ -49,7 +49,7 @@ CATALOG_PATH = Path(__file__).resolve().parent / "catalog.json"
 CATALOG_ENV = "UHB_ROUTER_CATALOG"
 
 #: A chain longer than this is a configuration accident, not a fallback plan.
-MAX_CANDIDATES = 8
+MAX_CANDIDATES = 12
 
 #: Classification thresholds, in signal points. Documented, not tuned by feel.
 LONG_REQUEST_WORDS = 120
@@ -162,6 +162,11 @@ class Candidate:
     base_url: str
     api_key_env: str
     model_id: str
+    #: Declared context window, in tokens. ``0`` means "not declared".
+    context: int = 0
+    #: Declared quota as ``((name, value), ...)``, e.g. ``(("rpm", 20), ("rpd", 50))``.
+    #: Stored as pairs, never a dict, so a ``Candidate`` stays hashable and immutable.
+    limits: tuple[tuple[str, int], ...] = ()
 
     def __str__(self) -> str:
         return f"{self.tier}/{self.ref}"
@@ -175,6 +180,8 @@ class Candidate:
             "base_url": self.base_url,
             "model_id": self.model_id,
             "api_key_env": self.api_key_env,
+            "context": self.context,
+            "limits": dict(self.limits),
         }
 
 
@@ -197,6 +204,31 @@ def _read_catalog(path: Path) -> dict[str, Any]:
         raise InvalidCatalog(f"{path}: cannot read the catalog ({exc})") from exc
     except json.JSONDecodeError as exc:
         raise InvalidCatalog(f"{path}: invalid JSON ({exc})") from exc
+
+
+def _positive_int(value: Any, where: str, key: str, *, minimum: int) -> int:
+    """A declared number that must be an int, not a bool, and at least ``minimum``."""
+    if value is None:
+        return 0
+    if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+        raise InvalidCatalog(f"{where}: {key!r} must be an integer >= {minimum}")
+    return int(value)
+
+
+def _limits(value: Any, where: str) -> tuple[tuple[str, int], ...]:
+    """Quota pairs. Absent means "unknown", which is not the same as "unlimited"."""
+    if value is None:
+        return ()
+    if not isinstance(value, dict) or not value:
+        raise InvalidCatalog(f"{where}: 'limits' must be a non-empty object")
+    pairs: list[tuple[str, int]] = []
+    for name, raw in value.items():
+        if not isinstance(name, str) or not name.strip():
+            raise InvalidCatalog(f"{where}: 'limits' keys must be non-empty strings")
+        if isinstance(raw, bool) or not isinstance(raw, int) or raw <= 0:
+            raise InvalidCatalog(f"{where}: limits.{name} must be a positive integer")
+        pairs.append((name, int(raw)))
+    return tuple(sorted(pairs))
 
 
 def load_catalog(
@@ -245,6 +277,8 @@ def load_catalog(
             descriptor = table.resolve_provider(ref)
         except UnknownModelRef as exc:
             raise InvalidCatalog(f"{where}: {exc}") from exc
+        context = _positive_int(entry.get("context"), where, "context", minimum=0)
+        limits = _limits(entry.get("limits"), where)
         candidates.append(
             Candidate(
                 ref=ref,
@@ -254,6 +288,8 @@ def load_catalog(
                 base_url=descriptor.base_url,
                 api_key_env=descriptor.api_key_env,
                 model_id=descriptor.model_id,
+                context=context,
+                limits=limits,
             )
         )
 
@@ -337,6 +373,11 @@ def route(
     tiers = list(policy.tiers[start:])
     if not spec.allow_paid:
         tiers = [tier for tier in tiers if tier != "paid"]
+    if spec.free_first:
+        # A free model is tried before the mode's own tier: the chain spends no
+        # money while a free candidate can hold the complexity. ``paid`` is still
+        # governed by ``allow_paid`` above, so free_first can never open it.
+        tiers = ["free"] + [tier for tier in tiers if tier != "free"]
 
     candidates = _chain(tiers, chosen_complexity, policy)
     if not candidates:

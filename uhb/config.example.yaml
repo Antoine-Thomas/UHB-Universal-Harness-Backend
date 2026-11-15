@@ -29,6 +29,24 @@ providers:
     base_url: http://127.0.0.1:11434/v1
     api_key_env: OLLAMA_API_KEY  # unused by a local Ollama, kept for the shape
     models: ["qwen3:8b", "llama3.3:70b"]
+  # Free tiers. Copy the variable NAME only: the value stays in the environment,
+  # and a provider with no key is skipped by name rather than called (401 avoided).
+  openrouter:
+    protocol: openai
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    models:
+      - nvidia/nemotron-3-ultra-550b-a55b:free
+      - google/gemma-4-31b-it:free
+      - recursive/flint-v1.0:free
+  nous:
+    protocol: openai
+    base_url: https://inference-api.nousresearch.com/v1
+    api_key_env: NOUS_API_KEY
+    models:
+      - meituan/longcat-2.5:free
+      - upstage/solar-mini4:free
+      - stepfun/step-3.7-flash:free
 
 # Routing: intents in, model references out. First matching rule wins, and the
 # `default` is the fallback when nothing matches.

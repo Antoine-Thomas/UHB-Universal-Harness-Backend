@@ -53,6 +53,7 @@ PROFILE_KEYS = (
     "constraints",
     "model",
     "allow_paid",
+    "free_first",
     "max_turns",
 )
 
@@ -151,6 +152,9 @@ class ModeSpec:
     temperature: float = 0.0
     max_tokens: int = 2048
     allow_paid: bool = False
+    #: Try the ``free`` tier before the mode's own tier. Independent of
+    #: ``allow_paid``: it reorders the chain, it never opens the paid tier.
+    free_first: bool = False
     max_turns: int = 1
     source: str = field(default="", compare=False)
 
@@ -219,6 +223,7 @@ class ModeSpec:
             "system_prompt": self.system_prompt,
             "model": {"tier": self.tier, "temperature": self.temperature, "max_tokens": self.max_tokens},
             "allow_paid": self.allow_paid,
+            "free_first": self.free_first,
             "max_turns": self.max_turns,
         }
 
@@ -280,6 +285,10 @@ def parse_mode(data: dict[str, Any], source: str = "<memory>") -> ModeSpec:
     if not isinstance(allow_paid, bool):
         raise _fail(source, "allow_paid must be true or false")
 
+    free_first = data.get("free_first", False)
+    if not isinstance(free_first, bool):
+        raise _fail(source, "free_first must be true or false")
+
     return ModeSpec(
         name=name,
         description=str(data.get("description") or "").strip(),
@@ -294,6 +303,7 @@ def parse_mode(data: dict[str, Any], source: str = "<memory>") -> ModeSpec:
         temperature=temperature,
         max_tokens=max_tokens,
         allow_paid=allow_paid,
+        free_first=free_first,
         max_turns=max_turns,
         source=source,
     )

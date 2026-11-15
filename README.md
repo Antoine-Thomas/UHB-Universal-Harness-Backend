@@ -32,7 +32,7 @@ same chain, every time. You can inspect the decision before spending anything.
 | --- | --- | --- |
 | `route()` | p50 0.013 ms · p95 0.020 ms · p99 0.026 ms | 2000 calls, `perf_counter` |
 | `classify()` | p50 0.007 ms | 2000 calls |
-| routing policy load | 0.50 ms cold · 0.22 ms cached | 5 models, 3 tiers |
+| routing policy load | 0.50 ms cold · 0.22 ms cached | 11 models, 3 tiers |
 
 ### 2. Fail-closed permissions, not suggestions
 
@@ -60,6 +60,30 @@ byte-level snapshot of the whole tree before and after a refused write.
 Adding a vendor means one entry in the provider table. Adding a model to the policy
 means one line in the catalog. A catalog entry no provider can serve is refused at
 load time — a route pointing nowhere is worse than no route.
+
+### 4. The free models and their quotas
+
+Six `free` candidates ship in the catalog, reached through two OpenAI-compatible
+providers. No key is read anywhere in UHB: the router carries the **variable
+name**, and the caller resolves the value at call time.
+
+| Model | Provider | Variable | Context | Declared quota |
+| --- | --- | --- | --- | --- |
+| `meituan/longcat-2.5:free` | `nous` | `NOUS_API_KEY` | 1 048 576 | 20 RPM · 50 RPD |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | `openrouter` | `OPENROUTER_API_KEY` | 1 000 000 | 20 RPM · 50 RPD |
+| `recursive/flint-v1.0:free` | `openrouter` | `OPENROUTER_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+| `upstage/solar-mini4:free` | `nous` | `NOUS_API_KEY` | 524 288 | 20 RPM · 50 RPD |
+| `google/gemma-4-31b-it:free` | `openrouter` | `OPENROUTER_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+| `stepfun/step-3.7-flash:free` | `nous` | `NOUS_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+
+The quotas are **policy ceilings set by the operator, not measurements**: the real
+window is advertised by the provider in its `x-ratelimit-*` response headers. A
+`429` is treated as an ordinary failure — recorded by exception class, never by
+payload — and the chain moves on to the next candidate.
+
+`free_first: true` on a profile (shipped on `chat`, `dev` and `review`) starts the
+chain at the `free` tier before the mode's own tier. `paid` stays governed by
+`allow_paid`: `free_first` reorders the chain, it never opens the paid tier.
 
 ---
 

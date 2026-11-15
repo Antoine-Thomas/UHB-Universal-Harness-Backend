@@ -143,6 +143,30 @@ empty string that reads like an answer.
 `paid` is only reachable when the mode carries `allow_paid: true`. No shipped profile allows
 it: an expensive model remains a manual decision.
 
+### The free models and their quotas
+
+Six `free` candidates ship in the catalog, reached through two OpenAI-compatible providers.
+No key is read: the router carries the variable **name**, and the caller resolves the value
+at call time.
+
+| Model | Provider | Variable | Context | Declared quota |
+| --- | --- | --- | --- | --- |
+| `meituan/longcat-2.5:free` | `nous` | `NOUS_API_KEY` | 1 048 576 | 20 RPM · 50 RPD |
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | `openrouter` | `OPENROUTER_API_KEY` | 1 000 000 | 20 RPM · 50 RPD |
+| `recursive/flint-v1.0:free` | `openrouter` | `OPENROUTER_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+| `upstage/solar-mini4:free` | `nous` | `NOUS_API_KEY` | 524 288 | 20 RPM · 50 RPD |
+| `google/gemma-4-31b-it:free` | `openrouter` | `OPENROUTER_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+| `stepfun/step-3.7-flash:free` | `nous` | `NOUS_API_KEY` | 262 144 | 20 RPM · 50 RPD |
+
+These quotas are **policy ceilings set by the operator, not measurements**: the real window
+is advertised by the provider in its `x-ratelimit-*` response headers. A `429` is treated as
+an ordinary failure — recorded by exception class, never by payload — and the chain moves on
+to the next candidate.
+
+`free_first: true` on a profile (shipped on `chat`, `dev` and `review`) starts the chain at the
+`free` tier before the mode's own tier. `paid` stays governed by `allow_paid`: `free_first`
+reorders the chain, it never opens the paid tier.
+
 ---
 
 ## 6. The compiled wiki

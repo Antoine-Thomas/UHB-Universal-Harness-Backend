@@ -103,8 +103,9 @@ def test_http_entrypoint_runs_a_real_harness_and_returns_its_tokens(stub):
 
     argv = json.loads(log.read_text(encoding="utf-8"))
     assert "-z" in argv and "dis bonjour" in argv, "the prompt reached the harness process"
-    assert argv[argv.index("--provider") + 1] == "deepseek"
-    assert argv[argv.index("-m") + 1] == "deepseek-flash", "the routed model reached the harness"
+    chosen = route("dis bonjour", "dev").chosen
+    assert argv[argv.index("--provider") + 1] == chosen.ref.split("/", 1)[0]
+    assert argv[argv.index("-m") + 1] == chosen.model_id, "the routed model reached the harness"
 
 
 # --- point 2: `uhb execute` with a harness behind it -----------------------
@@ -187,9 +188,10 @@ def repo(tmp_path: Path) -> Path:
     return root
 
 
-def test_the_router_calls_deepseek_flash_with_the_documented_request(repo: Path, monkeypatch):
-    """No key needed: the transport is mocked, the router and the pipeline are real."""
+def test_the_router_calls_the_first_candidate_with_the_documented_request(repo: Path, monkeypatch):
+    """No real key needed: the transport is mocked, the router and the pipeline are real."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "placeholder-never-logged")
+    monkeypatch.setenv("NOUS_API_KEY", "placeholder-never-logged")
     seen: list[dict] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -216,10 +218,11 @@ def test_the_router_calls_deepseek_flash_with_the_documented_request(repo: Path,
     result = ingest(source, workspace=repo / "uhb" / "hub" / "wiki", project=repo, mode="dev")
 
     assert result.pages_created == ["concepts/hub.md"]
+    chosen = route("Compile this note.", "dev", complexity="standard").chosen
     assert seen == [
         {
-            "url": "https://api.deepseek.com/v1/chat/completions",
-            "model": "deepseek-flash",
+            "url": chosen.base_url.rstrip("/") + "/chat/completions",
+            "model": chosen.model_id,
             "reasoning": "none",
             "auth": True,
         }
@@ -234,6 +237,8 @@ def test_the_router_calls_deepseek_flash_with_the_documented_request(repo: Path,
 def test_a_vendor_error_falls_through_the_chain(repo: Path, monkeypatch):
     """A 500 from every provider is a recorded chain, not an empty wiki page."""
     monkeypatch.setenv("DEEPSEEK_API_KEY", "placeholder-never-logged")
+    monkeypatch.setenv("NOUS_API_KEY", "placeholder-never-logged")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "placeholder-never-logged")
     calls: list[tuple[str, str]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -251,9 +256,10 @@ def test_a_vendor_error_falls_through_the_chain(repo: Path, monkeypatch):
     source = repo / "uhb" / "hub" / "wiki" / "raw" / "notes" / "note.md"
     source.write_text("The HUB compiles sources.\n", encoding="utf-8")
 
+    decision = route("Compile these sources.", "dev", complexity="standard")
     with pytest.raises(AllProvidersFailed) as caught:
         ingest(source, workspace=repo / "uhb" / "hub" / "wiki", project=repo, mode="dev")
 
-    assert [model for _host, model in calls] == ["deepseek-flash", "deepseek-v4-pro", "qwen3:8b"]
-    assert [attempt.outcome for attempt in caught.value.attempts] == ["failed", "failed", "failed"]
+    assert [model for _host, model in calls] == [c.model_id for c in decision.candidates]
+    assert [attempt.outcome for attempt in caught.value.attempts] == ["failed"] * len(decision.candidates)
     assert not (repo / "uhb" / "hub" / "wiki" / "wiki" / "concepts" / "hub.md").exists()

@@ -15,5 +15,6 @@
   ],
   "model": {"tier": "eco", "temperature": 0.0, "max_tokens": 4096},
   "allow_paid": false,
+  "free_first": true,
   "max_turns": 1
 }
