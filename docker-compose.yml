@@ -48,6 +48,13 @@ services:
       # /siyuan/blocks read content. Left unset, that route answers 400 saying
       # exactly what is missing — it never reports "0 blocks" for a refusal.
       SIYUAN_TOKEN: ${SIYUAN_API_TOKEN:-}
+      # The token a HOST process (UH, a script) must present to stop this server.
+      # Left empty, the container generates its own on first use: its own panel can
+      # then stop it, but nothing outside the container can — a host `uh web` falls
+      # back to terminating the process, exactly as before this route existed.
+      # Share it by exporting the same value before `docker compose up`, or by
+      # putting it in `.env`: `UHB_SHUTDOWN_TOKEN=<token from ~/.uhb/shutdown-token>`.
+      UHB_SHUTDOWN_TOKEN: ${UHB_SHUTDOWN_TOKEN:-}
       # The harness binary lives on the host; mount it or leave this unset.
       UHB_HERMES_BIN: ${UHB_HERMES_BIN:-}
       UHB_CONFIG: /app/config.yaml
