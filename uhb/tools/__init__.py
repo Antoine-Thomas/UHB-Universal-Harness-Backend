@@ -17,6 +17,7 @@ matplotlib code" and "here is the chart".
 
 from __future__ import annotations
 
+from . import desktop, execute
 from .execute import (
     DEFAULT_TIMEOUT,
     MAX_CODE_CHARS,
@@ -34,6 +35,8 @@ from .execute import (
 
 __all__ = [
     "CodeExecutionError",
+    "desktop",
+    "execute",
     "DEFAULT_TIMEOUT",
     "ExecutionResult",
     "ImageArtifact",

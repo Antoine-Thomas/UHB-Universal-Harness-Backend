@@ -46,7 +46,7 @@ from ..hub.router import (
     route,
     select_model,
 )
-from ..tools import catalog
+from ..tools import catalog, desktop
 from . import memory_routes
 from . import shutdown as shutdown_routes
 from .panel import manual_path, status_payload
@@ -62,6 +62,34 @@ DEFAULT_PORT = 8101
 #: nothing else: `/route` plans a turn, it does not run one.
 POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex",
                "/tools/execute", "/shutdown")
+
+#: The implementations behind `POST /tools/<name>`. One table, so the catalogue and
+#: the dispatch cannot disagree about what exists; a name in `catalog.TOOLS` with no
+#: entry here answers 500 "catalogued but not wired", which is the bug it is.
+TOOL_CALLS = {
+    "desktop_windows": desktop.windows,
+    "desktop_snapshot": desktop.snapshot,
+    "desktop_find": desktop.find,
+    "desktop_click": desktop.click,
+    "desktop_type": desktop.type_text,
+    "desktop_open_url": desktop.open_url,
+}
+
+#: A handled refusal is a status the client can act on, not a 500.
+TOOL_REFUSAL_STATUS = {
+    "platform_unavailable": 503,
+    "backend_missing": 503,
+    "backend_failed": 500,
+    "stale_ref": 409,
+    "target_not_found": 404,
+    "action_failed": 502,
+    "unsafe_url": 400,
+    "invalid_url": 400,
+    "invalid_request": 400,
+    "unsupported_target": 400,
+    "browser_failed": 502,
+    "browser_refused": 502,
+}
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -213,7 +241,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.rstrip("/")
-        if path not in POST_ROUTES:
+        # `/tools/<name>` is the generic call surface for the catalogue: one route
+        # per tool would make the API a second registry. `/tools/execute` keeps its
+        # own handler because it predates the catalogue and carries a body shape
+        # (code, timeout, mode) that is not a parameter object.
+        generic_tool = (
+            path.startswith("/tools/")
+            and path.count("/") == 2
+            and path != "/tools/execute"
+        )
+        if path not in POST_ROUTES and not generic_tool:
             self._json(404, {"error": {"message": "not found", "type": "not_found"}})
             return
         # Refuse before reading a byte of the body: a foreign page cannot spend
@@ -235,6 +272,8 @@ class Handler(BaseHTTPRequestHandler):
             self._rag_reindex(payload)
         elif path == "/tools/execute":
             self._tools_execute(payload)
+        elif path.startswith("/tools/"):
+            self._tools_call(path.split("/", 2)[2], payload)
         elif path == "/shutdown":
             self._shutdown(payload)
         elif path == "/v1/chat/completions":
@@ -389,6 +428,64 @@ class Handler(BaseHTTPRequestHandler):
 
         payload["request_id"] = request_id
         self._json(200, payload)
+
+    def _tools_call(self, name: str, payload: dict[str, Any]) -> None:
+        """Call one catalogued tool by name: the mode first, then the tool.
+
+        Same permission check as ``/tools/execute``, and it happens before the
+        implementation is looked up: a tool the mode does not allow is refused even
+        if it does not exist, so the answer cannot be used to enumerate.
+        """
+        request_id = uuid4().hex[:12]
+        spec = catalog.get(name)
+        if spec is None:
+            known = ", ".join(sorted(spec.name for spec in catalog.specs()))
+            self._json(404, {
+                "error": {"message": f"unknown tool {name!r}; known: {known}",
+                          "type": "not_found",
+                          "hint": "GET /tools lists every name"},
+                "request_id": request_id,
+            })
+            return
+        try:
+            get_mode(self.mode).check_tool(name)
+        except (ModeViolation, ModeRequired, UnknownMode) as exc:
+            self._refuse_tool(403, str(exc), {
+                "error": {"message": str(exc), "type": "forbidden"},
+                "request_id": request_id,
+            })
+            return
+        function = TOOL_CALLS.get(name)
+        if function is None:
+            self._json(500, {
+                "error": {"message": f"tool {name!r} is catalogued but not wired",
+                          "type": "configuration",
+                          "hint": "a catalogue entry without an implementation is a bug"},
+                "request_id": request_id,
+            })
+            return
+        kwargs = {key: value for key, value in payload.items()
+                  if key in spec.parameters.get("properties", {})}
+        try:
+            result = function(**kwargs)
+        except TypeError as exc:
+            self._json(400, {
+                "error": {"message": f"bad arguments: {exc}", "type": "invalid_request_error"},
+                "request_id": request_id,
+            })
+            return
+        except Exception as exc:  # noqa: BLE001 - an unwired tool never takes the server down
+            self._json(500, {
+                "error": {"message": f"{type(exc).__name__}: {exc}", "type": "tool_error"},
+                "request_id": request_id,
+            })
+            return
+        result["request_id"] = request_id
+        if result.get("ok"):
+            self._json(200, result)
+            return
+        code = str((result.get("reason") or {}).get("code") or "")
+        self._json(TOOL_REFUSAL_STATUS.get(code, 400), result)
 
     # -- tools ----------------------------------------------------------------
 

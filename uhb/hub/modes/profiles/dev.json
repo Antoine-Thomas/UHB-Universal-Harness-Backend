@@ -2,10 +2,40 @@
   "name": "dev",
   "description": "Change code and tests. Write scope is the project, never configuration or secrets.",
   "kind": "execution",
-  "read": ["**"],
-  "write": ["uhb/**", "tests/**", "docs/**", "MEMORY.md", "memory.md", "CLAUDE.md"],
-  "deny": ["**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/secrets/**", "**/credentials/**"],
-  "tools": ["read_file", "write_file", "patch", "search", "git", "run_tests", "execute_code"],
+  "read": [
+    "**"
+  ],
+  "write": [
+    "uhb/**",
+    "tests/**",
+    "docs/**",
+    "MEMORY.md",
+    "memory.md",
+    "CLAUDE.md"
+  ],
+  "deny": [
+    "**/.env",
+    "**/.env.*",
+    "**/*.key",
+    "**/*.pem",
+    "**/secrets/**",
+    "**/credentials/**"
+  ],
+  "tools": [
+    "read_file",
+    "write_file",
+    "patch",
+    "search",
+    "git",
+    "run_tests",
+    "execute_code",
+    "desktop_windows",
+    "desktop_snapshot",
+    "desktop_find",
+    "desktop_click",
+    "desktop_type",
+    "desktop_open_url"
+  ],
   "system_prompt": "You change code in an existing repository. Read before you write, and keep the diff to what the task needs.",
   "constraints": [
     "Never read or print a credential file: .env, keys, tokens.",
@@ -13,7 +43,11 @@
     "Touch only the files the task requires; report anything else you noticed but did not touch.",
     "No history rewrite, no --force, no commit unless the operator asked for one."
   ],
-  "model": {"tier": "eco", "temperature": 0.1, "max_tokens": 8192},
+  "model": {
+    "tier": "eco",
+    "temperature": 0.1,
+    "max_tokens": 8192
+  },
   "allow_paid": false,
   "free_first": true,
   "max_turns": 30

@@ -18,11 +18,13 @@ from uhb.tools import catalog
 
 
 def test_every_catalogued_tool_is_the_callable_that_runs() -> None:
-    """The catalogue cannot describe a tool the package does not expose."""
+    """The catalogue cannot describe a tool nothing can execute."""
     import uhb.tools as tools_pkg
+    from uhb.entrypoints.server import TOOL_CALLS
 
     for spec in catalog.specs():
-        assert callable(getattr(tools_pkg, spec.name, None)), f"{spec.name} is described but absent"
+        target = getattr(tools_pkg, spec.name, None) or TOOL_CALLS.get(spec.name)
+        assert callable(target), f"{spec.name} is described but nothing runs it"
 
 
 def test_the_schema_is_a_valid_object_schema_derived_from_the_limits() -> None:

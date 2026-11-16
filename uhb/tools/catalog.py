@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from ..hub.modes import ModeSpec, UnknownMode, load_modes
+from . import desktop
 from .execute import DEFAULT_TIMEOUT, MAX_CODE_CHARS, MAX_TIMEOUT, TOOL_NAME
 
 CATALOG_VERSION = "1"
@@ -98,7 +99,143 @@ EXECUTE_CODE = ToolSpec(
 
 #: Every tool UHB knows. A tool that runs must be listed here: the catalogue is
 #: what a client reads before it asks for anything.
-TOOLS: tuple[ToolSpec, ...] = (EXECUTE_CODE,)
+DESKTOP_WINDOWS = ToolSpec(
+    name="desktop_windows",
+    description=(
+        "List the top-level windows currently on screen, with their title and "
+        "bounds. Observation only: it reads the operating system's accessibility "
+        "tree and changes nothing."
+    ),
+    parameters={"type": "object", "properties": {}, "additionalProperties": False},
+    category="desktop",
+    execution_type="in_process",
+    tags=("observation", "windows"),
+)
+
+DESKTOP_SNAPSHOT = ToolSpec(
+    name="desktop_snapshot",
+    description=(
+        "Read one window's accessibility tree and return its elements with a "
+        "reference per element. References are only valid for this snapshot: if "
+        "the screen changed, take a new one instead of acting on a stale ref."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "app": {
+                "type": "string",
+                "description": "Part of the window title to read. Empty reads the desktop root.",
+            },
+            "max_nodes": {
+                "type": "integer",
+                "description": "Upper bound on the number of elements returned.",
+                "minimum": 1,
+                "maximum": desktop.MAX_NODES,
+                "default": desktop.MAX_NODES,
+            },
+        },
+        "additionalProperties": False,
+    },
+    category="desktop",
+    execution_type="in_process",
+    tags=("observation", "accessibility"),
+)
+
+DESKTOP_FIND = ToolSpec(
+    name="desktop_find",
+    description=(
+        "Find elements whose name contains a piece of text, with references that "
+        "desktop_click and desktop_type accept. Observation only."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Case-insensitive fragment of an element name."},
+            "app": {"type": "string", "description": "Part of the window title. Empty reads the desktop root."},
+            "max_results": {"type": "integer", "description": "How many matches to return.",
+                            "minimum": 1, "maximum": 100, "default": 20},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    category="desktop",
+    execution_type="in_process",
+    tags=("observation", "search"),
+)
+
+DESKTOP_CLICK = ToolSpec(
+    name="desktop_click",
+    description=(
+        "Activate one element by its reference. The reference must come from a "
+        "snapshot this server still holds; an unknown or expired one is refused "
+        "rather than clicked."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "ref": {"type": "string", "description": "Reference returned by desktop_snapshot or desktop_find."},
+        },
+        "required": ["ref"],
+        "additionalProperties": False,
+    },
+    category="desktop",
+    execution_type="in_process",
+    tags=("action",),
+)
+
+DESKTOP_TYPE = ToolSpec(
+    name="desktop_type",
+    description=(
+        "Type text into the focused element, or into a referenced element after "
+        "focusing it. A reference is required when one is given: typing into "
+        "whatever has focus is how a message lands in the wrong window."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "text": {"type": "string", "description": "Text to type."},
+            "ref": {"type": "string", "description": "Optional element to focus first."},
+        },
+        "required": ["text"],
+        "additionalProperties": False,
+    },
+    category="desktop",
+    execution_type="in_process",
+    tags=("action", "keyboard"),
+)
+
+DESKTOP_OPEN_URL = ToolSpec(
+    name="desktop_open_url",
+    description=(
+        "Open a web address in the operator's default browser. Only http and https "
+        "are accepted: file: and javascript: are refused, because a tool that opens "
+        "local files is a tool that reads them."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "Absolute http(s) address to open."},
+            "target": {"type": "string", "enum": ["browser"],
+                       "description": "Where to open it. Only 'browser' is served by this build.",
+                       "default": "browser"},
+        },
+        "required": ["url"],
+        "additionalProperties": False,
+    },
+    category="desktop",
+    execution_type="in_process",
+    tags=("action", "browser"),
+)
+
+TOOLS: tuple[ToolSpec, ...] = (
+    EXECUTE_CODE,
+    DESKTOP_WINDOWS,
+    DESKTOP_SNAPSHOT,
+    DESKTOP_FIND,
+    DESKTOP_CLICK,
+    DESKTOP_TYPE,
+    DESKTOP_OPEN_URL,
+)
 
 _BY_NAME = {spec.name: spec for spec in TOOLS}
 
