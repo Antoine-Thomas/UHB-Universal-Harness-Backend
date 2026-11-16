@@ -54,6 +54,10 @@ ROOT = Path(__file__).resolve().parents[2]
 MARKER = ROOT / "uhb" / "data" / "siyuan" / "proof-marker.txt"
 #: Where the containerised UHB publishes.
 CONTAINER_PORT = 8101
+#: The project name is fixed, never inferred from the directory: `compose ps` in a
+#: tree whose folder was renamed would answer "empty" about another project, and
+#: every assertion below would pass while measuring nothing.
+PROJECT = "uhb"
 
 
 def free_port() -> int:
@@ -85,9 +89,31 @@ def run(
     return completed
 
 
+def compose(*argv: str, **kwargs) -> subprocess.CompletedProcess:
+    """`docker compose -p uhb …`: one project, named, whether we started it or not."""
+    return run("docker", "compose", "-p", PROJECT, *argv, **kwargs)
+
+
 def containers(quiet: bool = False) -> list[str]:
-    out = run("docker", "compose", "ps", "-a", "-q", quiet=quiet).stdout
+    return [line for line in compose("ps", "-a", "-q", quiet=quiet).stdout.split() if line]
+
+
+def containers_by_label() -> list[str]:
+    """Independent of the compose file: what Docker itself labels with our project."""
+    out = run("docker", "ps", "-aq",
+              "--filter", f"label=com.docker.compose.project={PROJECT}", quiet=True).stdout
     return [line for line in out.split() if line]
+
+
+def project_volumes() -> list[str]:
+    """Named volumes this project declares. Empty today: it mounts two directories."""
+    out = run("docker", "volume", "ls", "-q",
+              "--filter", f"label=com.docker.compose.project={PROJECT}", quiet=True).stdout
+    return [line for line in out.split() if line]
+
+
+def volume_exists(name: str) -> bool:
+    return run("docker", "volume", "inspect", name, quiet=True).returncode == 0
 
 
 def networks() -> set[str]:
@@ -144,7 +170,9 @@ def project():
     MARKER.parent.mkdir(parents=True, exist_ok=True)
     MARKER.write_text("survives a down\n", encoding="utf-8")
     yield {"networks": before_networks, "volumes": before_volumes}
-    run("docker", "compose", "down", "--timeout", "10")
+    # Never `-v`: this is the teardown of the proof, and the proof is about data
+    # surviving a `down`. A `-v` here would destroy the very thing being measured.
+    compose("down", "--timeout", "10")
 
 
 @pytest.fixture()
@@ -178,8 +206,8 @@ def test_the_docker_target_removes_the_project_and_keeps_the_data(project, host_
 
     # 1. the project's containers, built from the current tree: a stale image
     #    answers 404 on /shutdown and made the route look broken (measured).
-    run("docker", "compose", "build", "uhb", timeout=600)
-    run("docker", "compose", "up", "-d", "--no-deps", "uhb")
+    compose("build", "uhb", timeout=600)
+    compose("up", "-d", "--no-deps", "uhb")
     assert containers(), "the container did not start"
     assert wait_for(lambda: status_code(CONTAINER_PORT) == 200, timeout=90), (
         "the container never answered /status"
@@ -191,8 +219,13 @@ def test_the_docker_target_removes_the_project_and_keeps_the_data(project, host_
     assert status == 202, f"the route refused with {status}: {answer}"
     assert answer.get("plan", {}).get("targets") == ["docker"], answer
 
-    # 3. removed, not stopped.
+    # 3. removed, not stopped — measured twice: through compose, and through the
+    #    Docker label, which does not depend on this compose file being found.
     assert wait_for(lambda: not containers(quiet=True), timeout=90), "containers survived the shutdown"
+    assert containers_by_label() == [], (
+        "docker ps still lists containers labelled with this project: `compose ps` alone "
+        "would have missed them if the project name had drifted"
+    )
     assert wait_for(lambda: not port_open(CONTAINER_PORT), timeout=30), (
         "port 8101 is still listened on"
     )
@@ -217,4 +250,8 @@ def test_the_docker_target_removes_the_project_and_keeps_the_data(project, host_
     assert MARKER.read_text(encoding="utf-8").strip() == "survives a down", (
         "the bind mount did not survive: this is the data a real operator loses"
     )
+    # A named volume, if this project ever declares one, must still be inspectable:
+    # `down` without `-v` preserves it, and `volume inspect` is the check that says so.
+    for name in project_volumes():
+        assert volume_exists(name), f"volume {name} disappeared: was -v passed?"
     print("APRES: volumes inchanges, marqueur du bind mount intact")
