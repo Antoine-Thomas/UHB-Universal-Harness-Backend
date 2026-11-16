@@ -30,6 +30,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 from .. import __version__
 from ..adapters.hermes import HermesAdapter
@@ -45,6 +46,7 @@ from ..hub.router import (
     route,
     select_model,
 )
+from ..tools import catalog
 from . import memory_routes
 from . import shutdown as shutdown_routes
 from .panel import manual_path, status_payload
@@ -133,6 +135,9 @@ class Handler(BaseHTTPRequestHandler):
             # is a filesystem path, and to_dict() already leaves it out.
             modes = [spec.to_dict() for _name, spec in sorted(load_modes().items())]
             self._json(200, {"modes": modes, "count": len(modes)})
+            return
+        if path == "/tools" or path.startswith("/tools/"):
+            self._tools_catalog(path)
             return
         if path in ("/", "/index.html"):
             self._html(200, render_panel(
@@ -344,6 +349,46 @@ class Handler(BaseHTTPRequestHandler):
                 owner.server_close()
 
         threading.Thread(target=run, name="uhb-shutdown", daemon=True).start()
+
+    # -- catalogue ------------------------------------------------------------
+
+    def _tools_catalog(self, path: str) -> None:
+        """Serve the tool catalogue: read-only, and it can never grant anything.
+
+        ``GET /tools`` lists every tool, ``GET /tools/<name>`` details one. Both
+        accept ``?mode=`` — the *default* is the mode this server serves, and an
+        explicit value answers a what-if question without changing any permission:
+        executing still goes through ``POST /tools/execute``, which re-checks the
+        mode it was started with.
+        """
+        request_id = uuid4().hex[:12]
+        query = parse_qs(urlparse(self.path).query)
+        requested = (query.get("mode") or [""])[0].strip().lower()
+        mode = requested or self.mode
+        if mode:
+            try:
+                get_mode(mode)
+            except UnknownMode as exc:
+                self._json(404, {
+                    "error": {"message": str(exc), "type": "unknown_mode",
+                              "hint": "GET /modes lists the modes this build ships"},
+                    "request_id": request_id,
+                })
+                return
+
+        name = path.split("/", 2)[2] if path.startswith("/tools/") else ""
+        try:
+            payload = catalog.describe(name=name or None, mode=mode or None)
+        except catalog.UnknownTool as exc:
+            self._json(404, {
+                "error": {"message": str(exc), "type": "not_found",
+                          "hint": "GET /tools lists every name"},
+                "request_id": request_id,
+            })
+            return
+
+        payload["request_id"] = request_id
+        self._json(200, payload)
 
     # -- tools ----------------------------------------------------------------
 

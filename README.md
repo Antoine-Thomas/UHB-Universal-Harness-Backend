@@ -206,6 +206,36 @@ It is **containment, not a security boundary**: the snippet runs as your user, w
 your filesystem. That is the point — plot my data, check this regex — and it is why
 the HTTP route stays on loopback. See `uhb/tools/README.md` for the full contract.
 
+### The tool catalogue
+
+Every tool UHB can run is described once, in `uhb/tools/catalog.py`, built from the
+constants the tool itself enforces (`MAX_TIMEOUT`, `MAX_CODE_CHARS`), so a limit
+cannot be described here and applied elsewhere. Who may call it is still the mode's
+`tools` list — the catalogue never grants anything:
+
+```bash
+curl -s 127.0.0.1:8101/tools?mode=chat
+```
+
+```json
+{"tools": [{"name": "execute_code",
+            "description": "Execute Python code in the authorized workspace…",
+            "parameters": {"type": "object", "required": ["code"], "…": "…"},
+            "category": "code", "execution_type": "subprocess", "version": "1",
+            "enabled": true, "required_permissions": [], "compatible_modes": ["dev"],
+            "available": false,
+            "reason": {"code": "not_in_mode", "mode": "chat", "available_in": ["dev"],
+                       "hint": "the current mode does not declare this tool; …"}}],
+ "count": 1, "mode": "chat", "catalog_version": "1", "request_id": "…"}
+```
+
+`GET /tools/<name>` details one. `?mode=` answers a what-if question and changes
+nothing: `POST /tools/execute` re-checks the mode the server was **started** with,
+so reading the menu never opens a door. `available` is information; `reason` is a
+code (`not_in_mode`, `disabled`) plus a hint, so a client translates instead of
+parsing prose. In the chat, the model reaches the same payload through the
+`describe_tools` tool of UH's `uhb` toolset.
+
 `uhb update` has no `--force` and no `reset`. It fetches, refuses a dirty tree,
 fast-forwards only, and reports the commit before and after. If the branch has
 diverged it stops and says so.
