@@ -71,6 +71,8 @@ Runner = Callable[[list[str], Path | None], tuple[int, str, str]]
 #: ``(pid, signal) -> None``. Injectable for the same reason the runner is:
 #: a test must not signal a real pid it never owned.
 Signaller = Callable[[int, int], None]
+#: ``(pid) -> bool``. The liveness check, injectable for the same reason.
+AliveProbe = Callable[[int], bool]
 #: ``(port) -> [Listener]``. Injectable so tests kill nothing.
 Lister = Callable[[int], list["Listener"]]
 
@@ -353,7 +355,15 @@ def plan(
 # --- acting ----------------------------------------------------------------
 
 
-def _alive(pid: int, *, runner: Runner) -> bool:
+def _alive(pid: int, *, runner: Runner, probe: AliveProbe | None = None) -> bool:
+    """Is this pid still there? ``probe`` overrides the real check, for tests.
+
+    On POSIX the real check is ``os.kill(pid, 0)`` — a syscall, not a signal. It is
+    just as un-fakeable as a kill, so it is just as injectable: a test that fakes
+    the process list must not have to own the pid it invented.
+    """
+    if probe is not None:
+        return bool(probe(pid))
     if os.name == "nt":
         code, out, _err = runner(["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"], None)
         return code == 0 and f'"{pid}"' in out
@@ -372,6 +382,7 @@ def _stop_listener(
     runner: Runner,
     sleeper: Callable[[float], None],
     signaller: Signaller | None = None,
+    alive_probe: AliveProbe | None = None,
 ) -> Step:
     """Ask nicely, wait :data:`GRACE_SECONDS`, then force. Verify, do not assume.
 
@@ -394,7 +405,7 @@ def _stop_listener(
     while waited < GRACE_SECONDS:
         sleeper(0.2)
         waited += 0.2
-        if not _alive(listener.pid, runner=runner):
+        if not _alive(listener.pid, runner=runner, probe=alive_probe):
             return Step("local", f"{label}: stopped after {waited:.1f}s", True)
     if os.name == "nt":
         runner(["taskkill", "/F", "/T", "/PID", str(listener.pid)], None)
@@ -404,7 +415,7 @@ def _stop_listener(
         except OSError as exc:
             return Step("local", f"{label}: refused to die ({type(exc).__name__})", False)
     sleeper(0.2)
-    still = _alive(listener.pid, runner=runner)
+    still = _alive(listener.pid, runner=runner, probe=alive_probe)
     return Step(
         "local",
         f"{label}: " + ("killed after the grace period" if not still else "STILL ALIVE"),
@@ -436,12 +447,13 @@ def stop_local(
     lister: Lister | None = None,
     sleeper: Callable[[float], None] = time.sleep,
     signaller: Signaller | None = None,
+    alive_probe: AliveProbe | None = None,
 ) -> list[Step]:
     """Stop every recognisable listener on our ports, politely then firmly."""
     discovered = plan(targets=("local",), ports=ports, runner=runner, lister=lister)
     steps = [
         _stop_listener(listener, runner=runner or _default_runner, sleeper=sleeper,
-                       signaller=signaller)
+                       signaller=signaller, alive_probe=alive_probe)
         for listener in discovered.listeners
     ]
     steps += [

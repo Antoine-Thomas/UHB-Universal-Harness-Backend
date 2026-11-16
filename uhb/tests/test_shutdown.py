@@ -186,6 +186,7 @@ def test_our_listener_is_asked_to_leave_then_verified_gone() -> None:
         # the hard way: pid 333 belonged to another process, and the test reported
         # "cannot signal" instead of the behaviour it was written to prove.
         signaller=lambda pid, sig: state.__setitem__("alive", False),
+        alive_probe=lambda pid: state["alive"],
     )
 
     assert steps[0].ok is True
@@ -214,6 +215,7 @@ def test_a_stubborn_listener_is_forced_after_the_grace() -> None:
         ports=(8101,), runner=runner, lister=lambda port: [sd.Listener(port, 444, "python.exe")],
         sleeper=lambda _s: None,
         signaller=lambda pid, sig: signals.append(sig),
+        alive_probe=lambda pid: True,  # it never dies
     )
 
     assert steps[0].ok is False, "a process that survives the kill must be reported, not hidden"
@@ -240,10 +242,12 @@ def test_the_posix_path_never_signals_a_pid_it_was_not_given(monkeypatch) -> Non
         lister=lambda port: [sd.Listener(port, 999999, "python.exe")],
         sleeper=lambda _s: None,
         signaller=lambda pid, sig: seen.append((pid, sig)),
+        alive_probe=lambda pid: False,  # it left after the polite request
     )
 
     assert seen and seen[0] == (999999, 15)
-    assert steps[0].ok is False, "a pid that is still alive is reported, not hidden"
+    assert steps[0].ok is True, "gone after the polite signal is a success, not a death"""
+
 
 
 def test_an_unknown_target_is_refused() -> None:
