@@ -113,6 +113,9 @@ def build_parser() -> argparse.ArgumentParser:
     ui.add_argument("--base", default=f"http://{DEFAULT_HOST}:{DEFAULT_PORT}",
                     help="where UHB listens, as the browser will call it")
     ui.add_argument("--markup", action="store_true", help="print the widget markup and exit")
+    ui.add_argument("--shutdown", action="store_true",
+                    help="include the power button; the markup carries no token, "
+                         "fill data-uhb-token yourself")
     ui.add_argument("--json", action="store_true")
 
     health = sub.add_parser("health", help="report backend health")
@@ -339,7 +342,11 @@ def _brain(args: argparse.Namespace) -> int:
 
 def _ui(args: argparse.Namespace) -> int:
     """The widget, ready to paste, plus the state of the server that feeds it."""
-    markup = panel.snippet(version=__version__, base=args.base.rstrip("/"))
+    markup = panel.snippet(
+        version=__version__,
+        base=args.base.rstrip("/"),
+        shutdown=bool(getattr(args, "shutdown", False)),
+    )
     if args.markup:
         print(markup)
         return EXIT_OK

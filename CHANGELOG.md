@@ -13,6 +13,16 @@ Versions are read from `uhb/__init__.py` by `pyproject.toml`
 
 ### Added
 
+- `POST /shutdown` and a **power button** above the `9+ UHB` badge: the stack can
+  now be stopped from the interface instead of from a terminal. Three targets —
+  `docker` (`compose down` for this project only), `local` (listeners on 8101 /
+  8200 / 6806 recognised as ours: polite stop, then a forced kill after 5 s,
+  anything else reported and left alone) and `self` (stopped after the `202` is
+  flushed, so the UI reads "stopping", never a reset). Gates: a token
+  (`UHB_SHUTDOWN_TOKEN` or `~/.uhb/shutdown-token`), `{"confirm": true}`, and a
+  closed target list; `dry_run` returns the plan without touching anything. The
+  button is absent from `uhb ui --markup` unless `--shutdown` is asked for, and
+  the markup never carries the token.
 - `execute_code`, the first tool in `uhb/tools/`: it writes a Python snippet to
   its own run directory, executes it with the interpreter that hosts UHB, and
   reports the streams, the exit code and **the images the snippet produced** —
@@ -45,6 +55,14 @@ Versions are read from `uhb/__init__.py` by `pyproject.toml`
 
 ### Fixed
 
+- The CORS preflight advertised `GET` only, so any interface on another loopback
+  port was blocked by the browser before it could call a POST route — measured
+  with the power button, which reported a network failure on a healthy server.
+  It now allows `POST` and the `x-uhb-token` header, still for loopback and
+  `null` origins only; the token, not the preflight, is what authorises a stop.
+- `shutdown` decoded `tasklist`/`netstat` output as UTF-8, which killed its reader
+  thread on a French Windows (cp850) and left the local branch crashing instead
+  of stopping the process. It now decodes cp850/cp1252 too.
 - The RAG service refused to start without `manifeste.json`, so the `rag`
   container could not run while its own README promised `fragments: 0`. It now
   starts, `/sante` answers `200 {"status": "sans_index", "fragments": 0}`, and

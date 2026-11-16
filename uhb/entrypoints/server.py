@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -45,6 +46,7 @@ from ..hub.router import (
     select_model,
 )
 from . import memory_routes
+from . import shutdown as shutdown_routes
 from .panel import manual_path, status_payload
 from .panel import render as render_panel
 from .status import providers_facts
@@ -57,7 +59,7 @@ DEFAULT_PORT = 8101
 #: POST routes. They share the visitor checks (Origin, Content-Type) and
 #: nothing else: `/route` plans a turn, it does not run one.
 POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex",
-               "/tools/execute")
+               "/tools/execute", "/shutdown")
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -105,6 +107,9 @@ class Handler(BaseHTTPRequestHandler):
     #: The envelope this instance serves. `uhb run --mode` sets it; `chat` is the
     #: read-only default, so a server started without a mode cannot write.
     mode = "chat"
+    #: The server this handler serves. `make_server` sets it per instance; the
+    #: shutdown route needs it to close the socket it is answering on.
+    owner: ThreadingHTTPServer | None = None
 
     server_version = "uhb/0.1"
 
@@ -133,6 +138,7 @@ class Handler(BaseHTTPRequestHandler):
             self._html(200, render_panel(
                 version=__version__, mode=self.mode,
                 harness=getattr(self.adapter, "name", type(self.adapter).__name__),
+                shutdown_token=self._shutdown_token(),
             ))
             return
         if path == "/status":
@@ -224,6 +230,8 @@ class Handler(BaseHTTPRequestHandler):
             self._rag_reindex(payload)
         elif path == "/tools/execute":
             self._tools_execute(payload)
+        elif path == "/shutdown":
+            self._shutdown(payload)
         elif path == "/v1/chat/completions":
             self._openai(payload)
         else:
@@ -243,6 +251,99 @@ class Handler(BaseHTTPRequestHandler):
             self._json(exc.status, {"error": {"message": str(exc), "type": "memory"}})
             return
         self._json(200, result)
+
+    # -- tools ----------------------------------------------------------------
+
+    def _shutdown_token(self) -> str:
+        """The operator token, or nothing: no token means no button on the panel."""
+        try:
+            return shutdown_routes.resolve_token(create=True)
+        except shutdown_routes.ShutdownError:
+            return ""
+
+    def _shutdown(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /shutdown``: stop the stack, answer before the server dies.
+
+        Three gates before anything moves. A **token** (``X-UHB-Token``, or
+        ``token`` in the body) so a stray page or script cannot kill the stack;
+        **``{"confirm": true}``** — exactly true, not truthy — so a fat finger in
+        a UI cannot either; and the **target list**, checked against a closed set
+        instead of silently ignoring a typo.
+
+        ``dry_run`` stops after describing the plan. Otherwise the response is
+        written and flushed first, and a background thread stops Docker and the
+        local processes, then the socket this request arrived on — which is why
+        the interface reads "stopping" and never a connection reset.
+        """
+        given = self.headers.get(shutdown_routes.TOKEN_HEADER) or payload.get("token")
+        if not shutdown_routes.token_matches(given):
+            self._json(401, {"error": {
+                "message": "a shutdown token is required: send it in the "
+                           f"{shutdown_routes.TOKEN_HEADER} header (the operator's copy "
+                           f"is {shutdown_routes.token_path()})",
+                "type": "unauthorized",
+                "header": shutdown_routes.TOKEN_HEADER,
+            }})
+            return
+        if payload.get("confirm") is not True:
+            self._json(403, {"error": {
+                "message": 'stopping every service needs {"confirm": true}: an explicit '
+                           "confirmation, not a stray click",
+                "type": "forbidden"}})
+            return
+        raw = payload.get("stop")
+        if raw is None:
+            targets: tuple[str, ...] = shutdown_routes.DEFAULT_TARGETS
+        elif isinstance(raw, str) and raw.strip():
+            targets = (raw.strip(),)
+        elif isinstance(raw, list) and raw and all(isinstance(item, str) for item in raw):
+            targets = tuple(item.strip() for item in raw)
+        else:
+            self._json(400, {"error": {
+                "message": f"stop must be one of {', '.join(shutdown_routes.TARGETS)}, "
+                           "or a list of them",
+                "type": "invalid_request_error"}})
+            return
+        unknown = [name for name in targets if name not in shutdown_routes.TARGETS]
+        if unknown:
+            self._json(400, {"error": {
+                "message": f"unknown target(s): {', '.join(unknown)}; expected "
+                           f"{', '.join(shutdown_routes.TARGETS)}",
+                "type": "invalid_request_error"}})
+            return
+        try:
+            state = shutdown_routes.plan(targets=targets)
+        except shutdown_routes.ShutdownError as exc:
+            self._json(500, {"error": {"message": str(exc), "type": "shutdown"}})
+            return
+        if payload.get("dry_run"):
+            self._json(200, {"dry_run": True, **state.to_dict()})
+            return
+        self._json(202, {"accepted": True, "plan": state.to_dict(), "self_stops_in_s": 0.5})
+        self._stop_in_background(targets)
+
+    def _stop_in_background(self, targets: tuple[str, ...]) -> None:
+        """Stop the world from a thread, after the 202 has left the socket."""
+        owner = self.owner
+
+        def run() -> None:
+            time.sleep(0.5)  # the client must receive its answer first
+            try:
+                report = shutdown_routes.shutdown(targets=targets)
+            except Exception as exc:  # noqa: BLE001 - a failed stop is reported, never raised
+                print(f"[uhb] shutdown failed: {type(exc).__name__}: {exc}", flush=True)
+                return
+            for step in report["steps"]:
+                print(
+                    f"[uhb] shutdown {step['target']}: {step['detail']}"
+                    + ("" if step["ok"] else " (FAILED)"),
+                    flush=True,
+                )
+            if "self" in targets and owner is not None:
+                owner.shutdown()
+                owner.server_close()
+
+        threading.Thread(target=run, name="uhb-shutdown", daemon=True).start()
 
     # -- tools ----------------------------------------------------------------
 
@@ -454,13 +555,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self) -> None:
-        """Preflight for the embedded widget, read-only and local-only."""
+        """Preflight for the embedded widget, still local-only.
+
+        ``POST`` and the shutdown token header are allowed because an interface on
+        another loopback port (the common case) has to preflight before it can ask
+        ``/shutdown``: without them the browser blocks the request and the UI would
+        report a network failure for a route that is fine. What authorises the stop
+        is the token, not this answer — a foreign origin gets no CORS header at all.
+        """
         self.send_response(204)
         origin = self._cors_origin()
         if origin:
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "accept, content-type")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "accept, content-type, x-uhb-token")
             self.send_header("Access-Control-Max-Age", "600")
             self.send_header("Vary", "Origin")
         self.send_header("Content-Length", "0")
@@ -477,7 +585,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), Handler)
+    # One handler subclass per server: `owner` must point at *this* instance, and a
+    # shared class attribute would make every server in a process point at the last
+    # one created — the test suite builds several.
+    handler = type("BoundHandler", (Handler,), {"owner": None})
+    server = ThreadingHTTPServer((host, port), handler)
+    handler.owner = server
+    return server
 
 
 def serve(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:

@@ -73,12 +73,44 @@ Le point du bouton interroge <code>GET /status</code> au chargement.</p>
     border-radius: 8px; padding: 9px 14px; font-size: 14px; font-weight: 600;
     text-decoration: none; cursor: pointer; font-family: inherit; }
   #uhb-dialog a.uhb-btn.uhb-secondary { background: #fff; color: var(--uhb-brand); }
+  #uhb-dialog button.uhb-btn { display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--uhb-brand); background: var(--uhb-brand); color: #fff;
+    border-radius: 8px; padding: 9px 14px; font-size: 14px; font-weight: 600;
+    cursor: pointer; font-family: inherit; }
+  #uhb-dialog button.uhb-btn.uhb-secondary { background: #fff; color: var(--uhb-brand); }
+  #uhb-dialog button.uhb-btn.uhb-danger { background: var(--uhb-bad); border-color: var(--uhb-bad); }
+
+  /* The power button: rendered only when the integrator opts in (data-uhb-shutdown). */
+  #uhb-power { position: fixed; right: 18px; bottom: 62px; z-index: 40;
+    width: 34px; height: 34px; border-radius: 50%; display: inline-flex;
+    align-items: center; justify-content: center; cursor: pointer; line-height: 1;
+    background: #fff; color: var(--uhb-bad); border: 1px solid var(--uhb-line);
+    font-size: 16px; font-family: inherit;
+    box-shadow: 0 2px 10px rgba(16,21,26,.10); }
+  #uhb-power:hover { border-color: #c9d3db; }
+  #uhb-power:focus-visible { outline: 2px solid var(--uhb-bad); outline-offset: 2px; }
+  #uhb-power[disabled] { opacity: .45; cursor: default; }
+  #uhb-confirm[hidden] { display: none; }
+  #uhb-confirm { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--uhb-line); }
+  #uhb-confirm p { margin: 0 0 6px; font-size: 14px; }
+  #uhb-confirm .uhb-hint { margin: 0 0 12px; }
+  #uhb-confirm .uhb-result { margin: 10px 0 0; font-size: 13px; color: var(--uhb-muted); }
   @media (max-width: 480px) { #uhb-dialog { padding: 18px 16px 14px; } }
 </style>
 
 <button id="uhb-badge" type="button" aria-haspopup="dialog" aria-controls="uhb-modal"
         data-uhb-base="http://127.0.0.1:8101">
   <span class="uhb-dot" id="uhb-dot"></span>9+ UHB
+</button>
+
+<button id="uhb-power" type="button" hidden title="Arrêter les services UHB"
+        aria-label="Éteindre les services UHB">
+  <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" focusable="false">
+    <path d="M12 3.5v8.5" fill="none" stroke="currentColor" stroke-width="2.2"
+          stroke-linecap="round"/>
+    <path d="M7.6 6.3a7 7 0 1 0 8.8 0" fill="none" stroke="currentColor"
+          stroke-width="2.2" stroke-linecap="round"/>
+  </svg>
 </button>
 
 <div id="uhb-modal" hidden role="dialog" aria-modal="true" aria-labelledby="uhb-title">
@@ -101,6 +133,18 @@ Le point du bouton interroge <code>GET /status</code> au chargement.</p>
       <a class="uhb-btn uhb-secondary" data-uhb-path="/docs/manual.pdf" href="/docs/manual.pdf" download>User manual (EN)</a>
       <a class="uhb-btn uhb-secondary" data-uhb-path="/status" href="/status">État JSON</a>
     </div>
+
+    <div id="uhb-confirm" hidden>
+      <p><strong>Arrêter tous les services ?</strong></p>
+      <p class="uhb-hint">Serveur UHB, conteneurs Docker de ce projet, et les processus
+        locaux reconnus sur les ports 8101, 8200 et 6806. Un service qui ne répond pas
+        est forcé après 5 secondes. Cette action ne se défait pas toute seule.</p>
+      <div class="uhb-actions">
+        <button class="uhb-btn uhb-danger" id="uhb-confirm-yes" type="button">Éteindre</button>
+        <button class="uhb-btn uhb-secondary" id="uhb-confirm-no" type="button">Annuler</button>
+      </div>
+      <p class="uhb-result" id="uhb-shutdown-result" hidden></p>
+    </div>
   </div>
 </div>
 
@@ -112,6 +156,17 @@ Le point du bouton interroge <code>GET /status</code> au chargement.</p>
   var close = document.getElementById("uhb-close");
   var base = (badge.dataset.uhbBase || "").replace(/\/+$/, "");
   var lastFocus = null;
+
+  // The kill switch exists only when the integrator opted in, and it needs a
+  // token: a widget pasted from `uhb ui --markup` carries neither, so it cannot
+  // shut anything down by accident.
+  var power = document.getElementById("uhb-power");
+  var confirmBox = document.getElementById("uhb-confirm");
+  var confirmYes = document.getElementById("uhb-confirm-yes");
+  var confirmNo = document.getElementById("uhb-confirm-no");
+  var shutdownResult = document.getElementById("uhb-shutdown-result");
+  var token = badge.dataset.uhbToken || "";
+  if (power && badge.dataset.uhbShutdown === "1") { power.hidden = false; }
 
   // Download and JSON links follow the same base as the fetch: relative when the
   // widget is served by UHB, absolute when it is pasted into a dashboard elsewhere.
@@ -149,8 +204,64 @@ Le point du bouton interroge <code>GET /status</code> au chargement.</p>
     if (lastFocus) { lastFocus.focus(); }
   }
 
+  function shutdownNote(text, bad) {
+    if (!shutdownResult) { return; }
+    shutdownResult.hidden = false;
+    shutdownResult.textContent = text;
+    shutdownResult.style.color = bad ? "var(--uhb-bad)" : "var(--uhb-ok)";
+  }
+
+  function runShutdown() {
+    confirmYes.disabled = true;
+    shutdownNote("Arrêt en cours…", false);
+    // `data-uhb-stop` scopes what the button stops: "self", "docker", "local" or a
+    // comma-separated list. Absent, the server's default applies (all three).
+    var scoped = (badge.dataset.uhbStop || "").replace(/\s+/g, "");
+    var body = { confirm: true };
+    if (scoped) { body.stop = scoped.split(",").filter(Boolean); }
+    fetch(base + "/shutdown", {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-UHB-Token": token },
+      body: JSON.stringify(body)
+    })
+      .then(function (response) {
+        return response.json()
+          .catch(function () { return {}; })
+          .then(function (body) { return { status: response.status, body: body }; });
+      })
+      .then(function (result) {
+        if (result.status === 202 || result.status === 200) {
+          shutdownNote("Services arrêtés. Le serveur ne répond plus.", false);
+          power.disabled = true;
+          refresh();   // the dot goes red: this is the proof, not a promise
+          return;
+        }
+        var message = (result.body && result.body.error && result.body.error.message)
+          || ("refusé (HTTP " + result.status + ")");
+        shutdownNote(message, true);
+        confirmYes.disabled = false;
+      })
+      .catch(function () {
+        // A rejected fetch means the request never reached the route: CORS
+        // preflight, wrong base, server already down. Never claim success here —
+        // a UI that lies about a shutdown is worse than one that says "failed".
+        shutdownNote("Requête non délivrée (réseau ou CORS) : le serveur n'a pas "
+                     + "été prévenu. Vérifiez la console du navigateur.", true);
+        confirmYes.disabled = false;
+      });
+  }
+
   badge.addEventListener("click", open);
   close.addEventListener("click", shut);
+  if (power) {
+    power.addEventListener("click", function () {
+      open();
+      confirmBox.hidden = false;
+      confirmYes.focus();
+    });
+    confirmNo.addEventListener("click", function () { confirmBox.hidden = true; });
+    confirmYes.addEventListener("click", runShutdown);
+  }
   modal.addEventListener("click", function (event) { if (event.target === modal) { shut(); } });
   document.addEventListener("keydown", function (event) {
     if (event.key === "Escape" && !modal.hidden) { shut(); }

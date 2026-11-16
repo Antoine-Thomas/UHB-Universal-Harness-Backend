@@ -123,11 +123,46 @@ a backend nobody trusts:
 | `GET /status` | `connected`, `version`, `mode`, `harness`, providers with `key_loaded`, modes, docs URLs |
 | `GET /docs/manuel.pdf` · `/docs/manual.pdf` | the manual (French · English), `application/pdf`, as an attachment |
 | `POST /tools/execute` | runs a Python snippet as the server's own mode: streams, exit code, and the images it produced (path, MIME, optional `data:` URL) |
+| `POST /shutdown` | stops the stack — compose project, local listeners on the stack ports, then itself — with a token and `{"confirm": true}`; `dry_run` returns the plan |
 
 The panel is one self-contained HTML page: no CDN, no font download, no build step.
 Embed the whole page in a dashboard with an iframe if you want the status view.
 For the badge *and* its modal, copy the markup instead: the modal is a fixed
 overlay sized to its viewport, so an iframe the size of the badge clips it.
+
+### Stopping the stack from the interface
+
+The panel also carries a **power button**, just above the badge. It opens a
+confirmation, then `POST /shutdown` stops what the stack started:
+
+| Target | What it does |
+| --- | --- |
+| `docker` | `docker compose down --timeout 10` for this project only — never `--volumes`, never `--rmi` |
+| `local` | every listener on 8101 / 8200 / 6806 recognised as ours (`python`, `uvicorn`, `serveur_rag`, `SiYuan-Kernel`): a polite stop, then a forced kill after **5 s**. Anything else on those ports is reported and left alone |
+| `self` | the server that answered, stopped **after** the `202` is flushed, so the interface reads "stopping" and never a connection reset |
+
+Three gates, none of them optional: a **token** (`X-UHB-Token`, from
+`$UHB_SHUTDOWN_TOKEN` or `~/.uhb/shutdown-token`), **`{"confirm": true}`** —
+exactly true, not truthy — and a **closed list of targets**. `dry_run` returns the
+plan and touches nothing:
+
+```bash
+curl -s -X POST http://127.0.0.1:8101/shutdown \
+  -H "content-type: application/json" \
+  -H "X-UHB-Token: $(cat ~/.uhb/shutdown-token)" \
+  -d '{"confirm": true, "dry_run": true}'
+```
+
+That answer names the containers, the PIDs holding the ports, and the listeners it
+refuses (`chrome.exe` on 8200 is reported, never killed). Remove `dry_run` and the
+same request stops them in that order, reporting each step — including the ones
+that failed: a process that survives the kill is printed as `STILL ALIVE`, never
+counted as a success.
+
+`uhb ui --markup` does **not** carry the kill switch: it appears only with
+`--shutdown`, and even then the markup holds no token — set `data-uhb-token`
+yourself or the button answers `401`. A widget pasted into someone else's
+dashboard is not a kill switch by accident.
 
 `uhb status` never prints a credential: a provider's key is reported as `loaded` or
 `MISSING`, next to the variable **name**. `uhb config set` refuses any key whose

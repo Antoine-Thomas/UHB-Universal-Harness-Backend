@@ -87,7 +87,7 @@ state, the routing policy and the available modes.
 | `uhb config set <key> <value>` | write one configuration key |
 | `uhb update [--dry-run]` | fast-forward from the remote |
 
-`uhb run` serves five surfaces:
+`uhb run` serves seven surfaces:
 
 - `POST /v1/chat/completions` — OpenAI shape (streaming supported)
 - `POST /v1/messages` — Anthropic shape
@@ -95,6 +95,8 @@ state, the routing policy and the available modes.
 - `GET /status` — state as JSON
 - `GET /docs/manuel.pdf` / `GET /docs/manual.pdf` — this manual, French and English
 - `POST /tools/execute` — run a Python snippet as the server's mode and return the images it produced
+- `POST /shutdown` — stop the stack (this project's containers, the local processes on the stack
+  ports, then the server); needs a token and `{"confirm": true}`, `dry_run` only describes it
 
 ---
 
@@ -216,6 +218,8 @@ Recognised variables:
 | `UHB_ROUTER_CATALOG` | alternative routing catalog |
 | `UHB_HERMES_BIN` | harness binary (name, path, or argv prefix) |
 | `UHB_RUNS_DIR` | run directory of `execute_code` (default: `~/.uhb/runs`) |
+| `UHB_SHUTDOWN_TOKEN` | token of the power button (else `~/.uhb/shutdown-token`, created on first use) |
+| `UHB_SHUTDOWN_TOKEN_FILE` | path of the token file, if the default location does not fit |
 
 ---
 

@@ -86,7 +86,7 @@ Doit afficher la version, le commit git, les fournisseurs avec `key_env` et l'é
 | `uhb config set <clé> <valeur>` | écrit une clé de configuration |
 | `uhb update [--dry-run]` | avance en fast-forward depuis le dépôt distant |
 
-`uhb run` sert six surfaces :
+`uhb run` sert sept surfaces :
 
 - `POST /v1/chat/completions` — forme OpenAI (streaming accepté)
 - `POST /v1/messages` — forme Anthropic
@@ -94,6 +94,8 @@ Doit afficher la version, le commit git, les fournisseurs avec `key_env` et l'é
 - `GET /status` — état en JSON
 - `GET /docs/manuel.pdf` — ce manuel
 - `POST /tools/execute` — exécute un extrait Python pour le mode du serveur et rend les images produites
+- `POST /shutdown` — arrête la pile (conteneurs de ce projet, processus locaux des ports de la pile,
+  puis le serveur) ; exige un jeton et `{"confirm": true}`, `dry_run` ne fait que décrire
 
 ---
 
@@ -219,6 +221,8 @@ Variables reconnues :
 | `UHB_ROUTER_CATALOG` | catalogue de routage alternatif |
 | `UHB_HERMES_BIN` | binaire du harness (nom, chemin, ou préfixe argv) |
 | `UHB_RUNS_DIR` | dossier des exécutions de `execute_code` (défaut : `~/.uhb/runs`) |
+| `UHB_SHUTDOWN_TOKEN` | jeton du bouton d'arrêt (sinon `~/.uhb/shutdown-token`, créé à la première demande) |
+| `UHB_SHUTDOWN_TOKEN_FILE` | chemin du fichier de jeton, si l'emplacement par défaut ne convient pas |
 
 ---
 
