@@ -5,7 +5,10 @@ providers:
   ollama:
     protocol: openai
     base_url: http://host.docker.internal:11434/v1
-    model: qwen3:8b
+    # `models`, plural: that is the key the router and `/status` read. A
+    # singular `model:` here is silently ignored, and `/status` then reports
+    # "0 model(s)" for a provider that declares one.
+    models: ["qwen3:8b"]
     local: true
     # Kept for the shape: a local Ollama needs no key, but `resolve_provider`
     # returns one descriptor for every provider and `has_credentials` checks it.
@@ -13,7 +16,7 @@ providers:
   deepseek:
     protocol: openai
     base_url: https://api.deepseek.com/v1
-    model: deepseek-flash
+    models: ["deepseek-flash"]
     api_key_env: DEEPSEEK_API_KEY
   # The table must resolve every entry of `uhb/hub/router/catalog.json`:
   # `load_catalog` refuses a route no provider can serve, so a container missing

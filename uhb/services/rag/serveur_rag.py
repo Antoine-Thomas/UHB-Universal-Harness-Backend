@@ -99,9 +99,32 @@ def manifeste():
         raise HTTPException(status_code=503, detail="manifeste illisible : %s" % e)
 
 
+def manifeste_ou_none():
+    """Le manifeste, ou None. Le service doit DEMARRER sans index.
+
+    Un index n'est pas livre (voir README : « not shipped »). Refuser de demarrer
+    sans lui rendait le conteneur `rag` de docker-compose.yml impossible a lancer
+    et /sante injoignable — alors que ce meme README promet `fragments: 0`.
+    """
+    try:
+        with io.open(MANIFESTE, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
 @app.get("/sante")
 def sante():
-    m = manifeste()
+    m = manifeste_ou_none()
+    if m is None:
+        # Vide et honnete : le cerveau est vide, pas casse. /search, lui, refuse.
+        return {"status": "sans_index",
+                "fragments": 0,
+                "modele": None,
+                "par_source": {},
+                "index_mo": None,
+                "mis_a_jour": None,
+                "detail": "aucun index : voir uhb/services/rag/README.md"}
     return {"status": "ok",
             "fragments": m.get("fragments"),
             "modele": m.get("modele"),
@@ -118,6 +141,9 @@ def search(r: RequeteRecherche):
     if r.source and r.source not in ("siyuan", "skill", "wiki", "script_v4", "wordpress"):
         raise HTTPException(status_code=400,
                             detail="source inconnue : siyuan, skill, wiki, script_v4, wordpress")
+    # Sans index, une recherche doit dire 503, jamais renvoyer une liste vide :
+    # une liste vide se lirait « votre cerveau ne contient rien ».
+    manifeste()
     t0 = time.time()
     brut = moteur.chercher(r.question, k=r.k, source=r.source)
     resultats = []
@@ -184,7 +210,11 @@ if __name__ == "__main__":
             conn.close()
     except Exception:
         pass
-    m = manifeste()
-    print("RAG local sur http://%s:%d — %s fragments, modele %s"
-          % (a.hote, a.port, m.get("fragments"), m.get("modele")), flush=True)
+    m = manifeste_ou_none()
+    if m is None:
+        print("RAG local sur http://%s:%d — aucun index (fragments illisibles) : "
+              "/sante repond 0, /search repond 503" % (a.hote, a.port), flush=True)
+    else:
+        print("RAG local sur http://%s:%d — %s fragments, modele %s"
+              % (a.hote, a.port, m.get("fragments"), m.get("modele")), flush=True)
     uvicorn.run(app, host=a.hote, port=a.port, log_level="info")

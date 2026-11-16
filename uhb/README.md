@@ -106,6 +106,7 @@ uhb update                      # git pull --ff-only, then prove it
 uhb docs                        # path and URL of the embedded manual
 uhb brain status                # RAG (8200), SiYuan (6806), MARI (55553)
 uhb brain search "Bridge MARI"  # ask your own notes, through the local RAG
+uhb tools exec --mode dev -f chart.py  # run a snippet; report the images it wrote
 ```
 
 The `brain` group reads the local second brain when it exists — RAG on 8200, SiYuan
@@ -121,15 +122,84 @@ a backend nobody trusts:
 | `GET /` | panel: a discreet **9+ UHB** badge (green/orange dot), a modal with the six commands that matter, and the manual download |
 | `GET /status` | `connected`, `version`, `mode`, `harness`, providers with `key_loaded`, modes, docs URLs |
 | `GET /docs/manuel.pdf` · `/docs/manual.pdf` | the manual (French · English), `application/pdf`, as an attachment |
+| `POST /tools/execute` | runs a Python snippet as the server's own mode: streams, exit code, and the images it produced (path, MIME, optional `data:` URL) |
+| `POST /shutdown` | stops the stack — compose project, local listeners on the stack ports, then itself — with a token and `{"confirm": true}`; `dry_run` returns the plan |
 
 The panel is one self-contained HTML page: no CDN, no font download, no build step.
 Embed the whole page in a dashboard with an iframe if you want the status view.
 For the badge *and* its modal, copy the markup instead: the modal is a fixed
 overlay sized to its viewport, so an iframe the size of the badge clips it.
 
+### Stopping the stack from the interface
+
+The panel also carries a **power button**, just above the badge. It opens a
+confirmation, then `POST /shutdown` stops what the stack started:
+
+| Target | What it does |
+| --- | --- |
+| `docker` | `docker compose down --timeout 10` for this project only — never `--volumes`, never `--rmi` |
+| `local` | every listener on 8101 / 8200 / 6806 recognised as ours (`python`, `uvicorn`, `serveur_rag`, `SiYuan-Kernel`): a polite stop, then a forced kill after **5 s**. Anything else on those ports is reported and left alone |
+| `self` | the server that answered, stopped **after** the `202` is flushed, so the interface reads "stopping" and never a connection reset |
+
+Three gates, none of them optional: a **token** (`X-UHB-Token`, from
+`$UHB_SHUTDOWN_TOKEN` or `~/.uhb/shutdown-token`), **`{"confirm": true}`** —
+exactly true, not truthy — and a **closed list of targets**. `dry_run` returns the
+plan and touches nothing:
+
+```bash
+curl -s -X POST http://127.0.0.1:8101/shutdown \
+  -H "content-type: application/json" \
+  -H "X-UHB-Token: $(cat ~/.uhb/shutdown-token)" \
+  -d '{"confirm": true, "dry_run": true}'
+```
+
+That answer names the containers, the PIDs holding the ports, and the listeners it
+refuses (`chrome.exe` on 8200 is reported, never killed). Remove `dry_run` and the
+same request stops them in that order, reporting each step — including the ones
+that failed: a process that survives the kill is printed as `STILL ALIVE`, never
+counted as a success.
+
+`uhb ui --markup` does **not** carry the kill switch: it appears only with
+`--shutdown`, and even then the markup holds no token — set `data-uhb-token`
+yourself or the button answers `401`. A widget pasted into someone else's
+dashboard is not a kill switch by accident.
+
 `uhb status` never prints a credential: a provider's key is reported as `loaded` or
 `MISSING`, next to the variable **name**. `uhb config set` refuses any key whose
 last segment looks like a secret — a token value never enters a file.
+
+### The code execution tool
+
+Asked for a chart, a model writes matplotlib code and stops there. `execute_code`
+is the missing step, and it belongs in the backend, not in a prompt:
+
+```bash
+uhb tools exec --mode dev -f chart.py --base64 --json
+```
+
+```json
+{"ok": true, "exit_code": 0, "stdout": "saved sine.png\n", "duration_s": 1.19,
+ "images": [{"path": "~/.uhb/runs/run-20261116-000930-412f11/sine.png",
+             "relative": "sine.png", "mime": "image/png", "bytes": 39464,
+             "data_url": "data:image/png;base64,iVBORw0…"}]}
+```
+
+Three rules hold by construction, and each one is a test:
+
+- **the mode decides.** `execute_code` must be in the mode's `tools` list: `chat`,
+  `review` and `observe` refuse before a byte is written. `POST /tools/execute`
+  also refuses a body that names another mode than the one the server was started
+  with, so `--mode chat` cannot be escalated by a request;
+- **the child is scrubbed.** Allow-listed environment, the run directory as `HOME`,
+  `MPLBACKEND=Agg` so `savefig` works with no display. Every provider key in your
+  shell is dropped, so a snippet cannot print one into a transcript;
+- **nothing is silent.** A truncated stream says how many characters were dropped,
+  an image above 1.5 MB is described by its path instead of inlined, and the timeout
+  kills the process tree rather than leaving a child behind.
+
+It is **containment, not a security boundary**: the snippet runs as your user, with
+your filesystem. That is the point — plot my data, check this regex — and it is why
+the HTTP route stays on loopback. See `uhb/tools/README.md` for the full contract.
 
 `uhb update` has no `--force` and no `reset`. It fetches, refuses a dirty tree,
 fast-forwards only, and reports the commit before and after. If the branch has
@@ -316,8 +386,17 @@ gate belongs nowhere near an interactive path.
 - ☑ 1.4 wiring: gate on every write path, router in the pipeline and entrypoints
 - ☑ 2 packaging: CLI, installer, this README
 - ☑ 2.1 free tier: six free candidates, `free_first`, and the `allow_paid` cost policy
-- ☐ 3 distribution: public release of the HUB (licence decision: MIT spec + Fair
-  Source implementation), then the adapters against the real products
+- ☑ 3.1 licence: MIT for the contract, FSL-1.1-MIT for the implementation — the
+  split is stated in the licence section below, including what a non-OSI licence
+  means for adopters
+- ☑ 3.2 proof: `docker compose` end to end (`docs/proof/docker-compose-e2e.md`)
+  and the `9+ UHB` widget in a real page (`docs/proof/widget-proof.md`)
+- ☐ 3.3 adapters: `harness_maxxing` and `openclaw` run against the real products.
+  Both are written against their documented interfaces — a launcher binary for
+  `MAXXING_CLAUDE_BIN`, a `CliBackendConfig` for `api.registerCliBackend` — and
+  neither has been driven by a live control plane yet
+- ☐ 3.4 release: 1.0.0 — `CHANGELOG.md` entry, version bump, tag, GitHub release,
+  PyPI upload (`docs/RELEASING.md` is the checklist)
 
 ## Tests
 
@@ -341,5 +420,22 @@ path:
 The contract is open so harnesses can adopt it without a legal conversation. The
 implementation is Fair Source so the work can be funded. Both texts ship inside
 the package: no one has to guess which one covers what.
+
+**FSL-1.1-MIT is source-available, not open source.** It is not an OSI-approved
+licence, and no wording here should be read as claiming it is. Concretely:
+
+- you may read, run, modify and use the implementation commercially, including in
+  a paid product;
+- what it forbids is offering it (or a derivative) as a competing hosted or
+  distributed service;
+- each released version converts to **MIT two years after its release date**,
+  automatically and version by version — not the project as a whole, and with
+  nothing to request;
+- `pyproject.toml` declares the SPDX identifier `FSL-1.1-MIT`, and package
+  indexes will list it as a non-OSI licence. That is the intended reading.
+
+The specification layer above (`SPEC.md`, `ARCHITECTURE.md`, `ADAPTERS.md`,
+`NON-GOALS.md`, `README.md`) is MIT and OSI-approved: the contract can be
+implemented in any product, with no time limit and no condition.
 
 Built by Thomas Leroyer (Searching Murphy).

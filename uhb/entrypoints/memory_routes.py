@@ -32,6 +32,9 @@ import httpx
 
 #: The RAG service, started by hand (`python serveur_rag.py`), not by UHB.
 RAG_SERVICE_URL = "http://127.0.0.1:8200"
+#: In a container this address is wrong: 127.0.0.1 is the container itself, and
+#: the service is another container on the compose network (`http://rag:8200`).
+RAG_URL_ENV = "UHB_RAG_URL"
 #: Where the index files live, relative to the package (`uhb/services/rag`).
 RAG_DIR = Path(__file__).resolve().parents[1] / "services" / "rag"
 #: SiYuan's kernel, and the name of its token in the environment.
@@ -71,9 +74,19 @@ def _count_lines(path: Path) -> int | None:
 # --------------------------------------------------------------------------- #
 # RAG
 # --------------------------------------------------------------------------- #
-def rag_status(rag_dir: Path | None = None, service_url: str = RAG_SERVICE_URL,
+def rag_service_url() -> str:
+    """Where the RAG service listens: ``UHB_RAG_URL`` wins, else the local default.
+
+    Read at call time, never at import time: the same process must be able to
+    point at ``http://rag:8200`` inside a container and at loopback outside one.
+    """
+    return (os.environ.get(RAG_URL_ENV) or RAG_SERVICE_URL).rstrip("/")
+
+
+def rag_status(rag_dir: Path | None = None, service_url: str | None = None,
                timeout: float = 1.0, client: httpx.Client | None = None) -> dict:
     """What is on disk, and whether the service that reads it is up."""
+    service_url = (service_url or rag_service_url()).rstrip("/")
     folder = Path(rag_dir) if rag_dir is not None else RAG_DIR
     index = folder / "index.faiss"
     chunks = folder / "chunks.jsonl"
@@ -121,7 +134,7 @@ def rag_status(rag_dir: Path | None = None, service_url: str = RAG_SERVICE_URL,
     }
 
 
-def rag_reload(service_url: str = RAG_SERVICE_URL, timeout: float = 5.0,
+def rag_reload(service_url: str | None = None, timeout: float = 5.0,
                client: httpx.Client | None = None) -> dict:
     """Ask the RAG service to reload its index from disk.
 
@@ -129,7 +142,8 @@ def rag_reload(service_url: str = RAG_SERVICE_URL, timeout: float = 5.0,
     notes by tooling that is not in this repository. The route name says what the
     caller wants; the payload says what actually happened.
     """
-    url = f"{service_url.rstrip('/')}/recharger"
+    service_url = (service_url or rag_service_url()).rstrip("/")
+    url = f"{service_url}/recharger"
     try:
         with (client or httpx.Client(timeout=timeout)) as http:
             response = http.post(url)
@@ -140,8 +154,19 @@ def rag_reload(service_url: str = RAG_SERVICE_URL, timeout: float = 5.0,
             status=409,
         ) from exc
     if response.status_code != 200:
+        # Carry the service's own reason: "HTTP 503" alone hides whether the
+        # index is missing or the service is broken.
+        detail = ""
+        try:
+            body = response.json()
+            if isinstance(body, dict):
+                detail = str(body.get("detail") or body.get("message") or "")
+        except ValueError:
+            detail = ""
         raise MemoryRouteError(
-            f"the RAG service refused the reload (HTTP {response.status_code})", status=502
+            f"the RAG service refused the reload (HTTP {response.status_code})"
+            + (f": {detail}" if detail else ""),
+            status=502,
         )
     try:
         payload = response.json()
@@ -237,10 +262,12 @@ __all__ = [
     "MAX_BLOCKS",
     "RAG_DIR",
     "RAG_SERVICE_URL",
+    "RAG_URL_ENV",
     "SIYUAN_TOKEN_ENV",
     "SIYUAN_URL",
     "MemoryRouteError",
     "rag_reload",
+    "rag_service_url",
     "rag_status",
     "siyuan_blocks",
 ]

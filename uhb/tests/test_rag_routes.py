@@ -17,6 +17,12 @@ import pytest
 from uhb.entrypoints import memory_routes
 
 
+@pytest.fixture(autouse=True)
+def _no_container_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The suite must not inherit a compose-style `UHB_RAG_URL` from the shell."""
+    monkeypatch.delenv(memory_routes.RAG_URL_ENV, raising=False)
+
+
 def fake_client(handler) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler))
 
@@ -125,3 +131,50 @@ def test_a_reload_never_claims_to_have_rebuilt() -> None:
 
     assert "reindexed" not in result
     assert result["reloaded"] is True
+
+
+# --------------------------------------------------------------------------- #
+# the address: the container is not the host
+# --------------------------------------------------------------------------- #
+def test_the_service_address_follows_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inside a container, 127.0.0.1 is the container itself, not the RAG service."""
+    monkeypatch.setenv("UHB_RAG_URL", "http://rag:8200")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"status": "ok", "fragments": 7})
+
+    state = memory_routes.rag_status(client=fake_client(handler))
+
+    assert seen == ["http://rag:8200/sante"]
+    assert state["service_url"] == "http://rag:8200"
+    assert state["chunks"] == 7
+
+
+def test_an_explicit_address_wins_over_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("UHB_RAG_URL", "http://rag:8200")
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        return httpx.Response(200, json={"ok": True})
+
+    memory_routes.rag_reload(service_url="http://127.0.0.1:8299/", client=fake_client(handler))
+
+    assert seen == ["http://127.0.0.1:8299/recharger"]
+
+
+def test_the_default_stays_loopback_without_the_environment() -> None:
+    assert memory_routes.rag_service_url() == "http://127.0.0.1:8200"
+
+
+def test_a_refused_reload_carries_the_service_reason() -> None:
+    """`HTTP 503` alone hid whether the index was missing or the service broken."""
+    with pytest.raises(memory_routes.MemoryRouteError) as caught:
+        memory_routes.rag_reload(
+            client=fake_client(lambda r: httpx.Response(503, json={"detail": "manifeste illisible"}))
+        )
+
+    assert caught.value.status == 502
+    assert "manifeste illisible" in str(caught.value)

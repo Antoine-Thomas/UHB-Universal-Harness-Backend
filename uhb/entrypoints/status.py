@@ -64,16 +64,23 @@ def providers_facts(router: Router) -> list[dict[str, Any]]:
     rows = []
     for name, entry in sorted(router.providers.items()):
         env = str(entry.get("api_key_env", ""))
+        url = str(entry.get("base_url", ""))
         rows.append(
             {
                 "name": name,
                 "protocol": str(entry.get("protocol", "openai")),
-                "base_url": str(entry.get("base_url", "")),
+                "base_url": url,
                 "models": list(entry.get("models") or []),
                 # a NAME and a boolean: the value never leaves the environment
                 "key_env": env,
                 "key_loaded": bool(env) and env in os.environ,
-                "local": "127.0.0.1" in str(entry.get("base_url", "")) or "localhost" in str(entry.get("base_url", "")),
+                # The declared flag wins: `is_paid` reads it too, and in a
+                # container a local Ollama is reached through
+                # host.docker.internal, which is not a loopback name. Reading
+                # only the URL made `/status` call it remote while the router
+                # called it free — the widget's dot followed the wrong answer.
+                "local": bool(entry.get("local"))
+                or any(marker in url for marker in ("127.0.0.1", "localhost", "[::1]")),
             }
         )
     return rows

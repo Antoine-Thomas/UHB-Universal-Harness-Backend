@@ -57,6 +57,7 @@ include-package-data = false
 [tool.setuptools.package-data]
 "uhb" = ["config.example.yaml", "docs/*.md", "docs/*.pdf",
          "services/rag/*.py", "services/rag/*.txt", "services/rag/*.md",
+         "tools/*.md",
          "services/mari/*.md", "services/mari/bridge/*.cs",
          "services/mari/bridge/*.csproj", "services/mari/bridge/*.json"]
 "uhb.hub.modes" = ["profiles/*.json"]

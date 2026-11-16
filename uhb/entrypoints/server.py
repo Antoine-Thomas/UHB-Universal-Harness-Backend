@@ -25,10 +25,12 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
 
 from .. import __version__
 from ..adapters.hermes import HermesAdapter
@@ -36,7 +38,14 @@ from ..core.executor import Executor
 from ..core.health import Health
 from ..core.router import Router
 from ..core.types import StreamEvent, TaskContext
-from ..hub.modes import ModesError, UnknownMode, get_mode, load_modes
+from ..hub.modes import (
+    ModeRequired,
+    ModesError,
+    ModeViolation,
+    UnknownMode,
+    get_mode,
+    load_modes,
+)
 from ..hub.router import (
     COMPLEXITIES,
     InvalidCatalog,
@@ -44,7 +53,11 @@ from ..hub.router import (
     route,
     select_model,
 )
+from ..tools import catalog, desktop
+from ..tools.execute import DEFAULT_TIMEOUT as TOOL_DEFAULT_TIMEOUT
+from ..tools.execute import CodeExecutionError, execute_code
 from . import memory_routes
+from . import shutdown as shutdown_routes
 from .panel import manual_path, status_payload
 from .panel import render as render_panel
 from .status import providers_facts
@@ -54,7 +67,36 @@ DEFAULT_PORT = 8101
 
 #: POST routes. They share the visitor checks (Origin, Content-Type) and
 #: nothing else: `/route` plans a turn, it does not run one.
-POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex")
+POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex",
+               "/tools/execute", "/shutdown")
+
+#: The implementations behind `POST /tools/<name>`. One table, so the catalogue and
+#: the dispatch cannot disagree about what exists; a name in `catalog.TOOLS` with no
+#: entry here answers 500 "catalogued but not wired", which is the bug it is.
+TOOL_CALLS = {
+    "desktop_windows": desktop.windows,
+    "desktop_snapshot": desktop.snapshot,
+    "desktop_find": desktop.find,
+    "desktop_click": desktop.click,
+    "desktop_type": desktop.type_text,
+    "desktop_open_url": desktop.open_url,
+}
+
+#: A handled refusal is a status the client can act on, not a 500.
+TOOL_REFUSAL_STATUS = {
+    "platform_unavailable": 503,
+    "backend_missing": 503,
+    "backend_failed": 500,
+    "stale_ref": 409,
+    "target_not_found": 404,
+    "action_failed": 502,
+    "unsafe_url": 400,
+    "invalid_url": 400,
+    "invalid_request": 400,
+    "unsupported_target": 400,
+    "browser_failed": 502,
+    "browser_refused": 502,
+}
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -102,6 +144,9 @@ class Handler(BaseHTTPRequestHandler):
     #: The envelope this instance serves. `uhb run --mode` sets it; `chat` is the
     #: read-only default, so a server started without a mode cannot write.
     mode = "chat"
+    #: The server this handler serves. `make_server` sets it per instance; the
+    #: shutdown route needs it to close the socket it is answering on.
+    owner: ThreadingHTTPServer | None = None
 
     server_version = "uhb/0.1"
 
@@ -126,10 +171,14 @@ class Handler(BaseHTTPRequestHandler):
             modes = [spec.to_dict() for _name, spec in sorted(load_modes().items())]
             self._json(200, {"modes": modes, "count": len(modes)})
             return
+        if path == "/tools" or path.startswith("/tools/"):
+            self._tools_catalog(path)
+            return
         if path in ("/", "/index.html"):
             self._html(200, render_panel(
                 version=__version__, mode=self.mode,
                 harness=getattr(self.adapter, "name", type(self.adapter).__name__),
+                shutdown_token=self._shutdown_token(),
             ))
             return
         if path == "/status":
@@ -199,7 +248,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.rstrip("/")
-        if path not in POST_ROUTES:
+        # `/tools/<name>` is the generic call surface for the catalogue: one route
+        # per tool would make the API a second registry. `/tools/execute` keeps its
+        # own handler because it predates the catalogue and carries a body shape
+        # (code, timeout, mode) that is not a parameter object.
+        generic_tool = (
+            path.startswith("/tools/")
+            and path.count("/") == 2
+            and path != "/tools/execute"
+        )
+        if path not in POST_ROUTES and not generic_tool:
             self._json(404, {"error": {"message": "not found", "type": "not_found"}})
             return
         # Refuse before reading a byte of the body: a foreign page cannot spend
@@ -219,6 +277,12 @@ class Handler(BaseHTTPRequestHandler):
             self._plan(payload)
         elif path == "/rag/reindex":
             self._rag_reindex(payload)
+        elif path == "/tools/execute":
+            self._tools_execute(payload)
+        elif path.startswith("/tools/"):
+            self._tools_call(path.split("/", 2)[2], payload)
+        elif path == "/shutdown":
+            self._shutdown(payload)
         elif path == "/v1/chat/completions":
             self._openai(payload)
         else:
@@ -231,13 +295,261 @@ class Handler(BaseHTTPRequestHandler):
         There is no index builder in this repository, so a reindex from scratch
         would have nothing to run - see ``uhb/services/rag/README.md``.
         """
-        service = str(payload.get("service_url") or memory_routes.RAG_SERVICE_URL)
+        service = str(payload.get("service_url") or memory_routes.rag_service_url())
         try:
             result = memory_routes.rag_reload(service_url=service)
         except memory_routes.MemoryRouteError as exc:
             self._json(exc.status, {"error": {"message": str(exc), "type": "memory"}})
             return
         self._json(200, result)
+
+    # -- tools ----------------------------------------------------------------
+
+    def _shutdown_token(self) -> str:
+        """The operator token, or nothing: no token means no button on the panel."""
+        try:
+            return shutdown_routes.resolve_token(create=True)
+        except shutdown_routes.ShutdownError:
+            return ""
+
+    def _shutdown(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /shutdown``: stop the stack, answer before the server dies.
+
+        Three gates before anything moves. A **token** (``X-UHB-Token``, or
+        ``token`` in the body) so a stray page or script cannot kill the stack;
+        **``{"confirm": true}``** — exactly true, not truthy — so a fat finger in
+        a UI cannot either; and the **target list**, checked against a closed set
+        instead of silently ignoring a typo.
+
+        ``dry_run`` stops after describing the plan. Otherwise the response is
+        written and flushed first, and a background thread stops Docker and the
+        local processes, then the socket this request arrived on — which is why
+        the interface reads "stopping" and never a connection reset.
+        """
+        given = self.headers.get(shutdown_routes.TOKEN_HEADER) or payload.get("token")
+        if not shutdown_routes.token_matches(given):
+            self._json(401, {"error": {
+                "message": "a shutdown token is required: send it in the "
+                           f"{shutdown_routes.TOKEN_HEADER} header (the operator's copy "
+                           f"is {shutdown_routes.token_path()})",
+                "type": "unauthorized",
+                "header": shutdown_routes.TOKEN_HEADER,
+            }})
+            return
+        if payload.get("confirm") is not True:
+            self._json(403, {"error": {
+                "message": 'stopping every service needs {"confirm": true}: an explicit '
+                           "confirmation, not a stray click",
+                "type": "forbidden"}})
+            return
+        raw = payload.get("stop")
+        if raw is None:
+            targets: tuple[str, ...] = shutdown_routes.DEFAULT_TARGETS
+        elif isinstance(raw, str) and raw.strip():
+            targets = (raw.strip(),)
+        elif isinstance(raw, list) and raw and all(isinstance(item, str) for item in raw):
+            targets = tuple(item.strip() for item in raw)
+        else:
+            self._json(400, {"error": {
+                "message": f"stop must be one of {', '.join(shutdown_routes.TARGETS)}, "
+                           "or a list of them",
+                "type": "invalid_request_error"}})
+            return
+        unknown = [name for name in targets if name not in shutdown_routes.TARGETS]
+        if unknown:
+            self._json(400, {"error": {
+                "message": f"unknown target(s): {', '.join(unknown)}; expected "
+                           f"{', '.join(shutdown_routes.TARGETS)}",
+                "type": "invalid_request_error"}})
+            return
+        try:
+            state = shutdown_routes.plan(targets=targets)
+        except shutdown_routes.ShutdownError as exc:
+            self._json(500, {"error": {"message": str(exc), "type": "shutdown"}})
+            return
+        if payload.get("dry_run"):
+            self._json(200, {"dry_run": True, **state.to_dict()})
+            return
+        self._json(202, {"accepted": True, "plan": state.to_dict(), "self_stops_in_s": 0.5})
+        self._stop_in_background(targets)
+
+    def _stop_in_background(self, targets: tuple[str, ...]) -> None:
+        """Stop the world from a thread, after the 202 has left the socket."""
+        owner = self.owner
+
+        def run() -> None:
+            time.sleep(0.5)  # the client must receive its answer first
+            try:
+                report = shutdown_routes.shutdown(targets=targets)
+            except Exception as exc:  # noqa: BLE001 - a failed stop is reported, never raised
+                print(f"[uhb] shutdown failed: {type(exc).__name__}: {exc}", flush=True)
+                return
+            for step in report["steps"]:
+                print(
+                    f"[uhb] shutdown {step['target']}: {step['detail']}"
+                    + ("" if step["ok"] else " (FAILED)"),
+                    flush=True,
+                )
+            if "self" in targets and owner is not None:
+                owner.shutdown()
+                owner.server_close()
+
+        threading.Thread(target=run, name="uhb-shutdown", daemon=True).start()
+
+    # -- catalogue ------------------------------------------------------------
+
+    def _tools_catalog(self, path: str) -> None:
+        """Serve the tool catalogue: read-only, and it can never grant anything.
+
+        ``GET /tools`` lists every tool, ``GET /tools/<name>`` details one. Both
+        accept ``?mode=`` — the *default* is the mode this server serves, and an
+        explicit value answers a what-if question without changing any permission:
+        executing still goes through ``POST /tools/execute``, which re-checks the
+        mode it was started with.
+        """
+        request_id = uuid4().hex[:12]
+        query = parse_qs(urlparse(self.path).query)
+        requested = (query.get("mode") or [""])[0].strip().lower()
+        mode = requested or self.mode
+        if mode:
+            try:
+                get_mode(mode)
+            except UnknownMode as exc:
+                self._json(404, {
+                    "error": {"message": str(exc), "type": "unknown_mode",
+                              "hint": "GET /modes lists the modes this build ships"},
+                    "request_id": request_id,
+                })
+                return
+
+        name = path.split("/", 2)[2] if path.startswith("/tools/") else ""
+        try:
+            payload = catalog.describe(name=name or None, mode=mode or None)
+        except catalog.UnknownTool as exc:
+            self._json(404, {
+                "error": {"message": str(exc), "type": "not_found",
+                          "hint": "GET /tools lists every name"},
+                "request_id": request_id,
+            })
+            return
+
+        payload["request_id"] = request_id
+        self._json(200, payload)
+
+    def _tools_call(self, name: str, payload: dict[str, Any]) -> None:
+        """Call one catalogued tool by name: the mode first, then the tool.
+
+        Same permission check as ``/tools/execute``, and it happens before the
+        implementation is looked up: a tool the mode does not allow is refused even
+        if it does not exist, so the answer cannot be used to enumerate.
+        """
+        request_id = uuid4().hex[:12]
+        spec = catalog.get(name)
+        if spec is None:
+            known = ", ".join(sorted(spec.name for spec in catalog.specs()))
+            self._json(404, {
+                "error": {"message": f"unknown tool {name!r}; known: {known}",
+                          "type": "not_found",
+                          "hint": "GET /tools lists every name"},
+                "request_id": request_id,
+            })
+            return
+        try:
+            get_mode(self.mode).check_tool(name)
+        except (ModeViolation, ModeRequired, UnknownMode) as exc:
+            self._refuse_tool(403, str(exc), {
+                "error": {"message": str(exc), "type": "forbidden"},
+                "request_id": request_id,
+            })
+            return
+        function = TOOL_CALLS.get(name)
+        if function is None:
+            self._json(500, {
+                "error": {"message": f"tool {name!r} is catalogued but not wired",
+                          "type": "configuration",
+                          "hint": "a catalogue entry without an implementation is a bug"},
+                "request_id": request_id,
+            })
+            return
+        kwargs = {key: value for key, value in payload.items()
+                  if key in spec.parameters.get("properties", {})}
+        try:
+            result = function(**kwargs)
+        except TypeError as exc:
+            self._json(400, {
+                "error": {"message": f"bad arguments: {exc}", "type": "invalid_request_error"},
+                "request_id": request_id,
+            })
+            return
+        except Exception as exc:  # noqa: BLE001 - an unwired tool never takes the server down
+            self._json(500, {
+                "error": {"message": f"{type(exc).__name__}: {exc}", "type": "tool_error"},
+                "request_id": request_id,
+            })
+            return
+        result["request_id"] = request_id
+        if result.get("ok"):
+            self._json(200, result)
+            return
+        code = str((result.get("reason") or {}).get("code") or "")
+        self._json(TOOL_REFUSAL_STATUS.get(code, 400), result)
+
+    # -- tools ----------------------------------------------------------------
+
+    def _refuse_tool(self, status: int, reason: str, payload: dict[str, Any]) -> None:
+        """Answer a refusal, and journal it: a 403 nobody logged is a bug nobody sees.
+
+        Only the reason and the server's mode are written - never the code, never a
+        secret. The reason is the message the client already receives, so the log
+        and the answer cannot drift apart.
+        """
+        print(f"[uhb] tools/execute refused ({status}): {reason} [mode={self.mode}]", flush=True)
+        self._json(status, payload)
+
+    def _tools_execute(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /tools/execute``: run a snippet as the server's own mode.
+
+        Two refusals matter here. The mode is the one the server was started
+        with: a body naming another mode gets 403, because otherwise
+        ``uhb run --mode chat`` would hand execution to any client that asked for
+        ``"mode": "dev"`` and the envelope would mean nothing. And a mode whose
+        ``tools`` list has no ``execute_code`` (chat, review, observe) gets 403
+        from the tool itself, before a byte is written.
+        """
+        code = payload.get("code")
+        if not isinstance(code, str) or not code.strip():
+            self._json(400, {"error": {"message": "code must be a non-empty string",
+                                       "type": "invalid_request_error"}})
+            return
+        requested = str(payload.get("mode") or "").strip()
+        if requested and requested != self.mode:
+            reason = (f"this server serves mode {self.mode!r}; restart it with "
+                      f"--mode {requested} to execute on its behalf")
+            self._refuse_tool(403, reason, {"error": {"message": reason, "type": "forbidden"}})
+            return
+        try:
+            timeout = float(payload.get("timeout") or TOOL_DEFAULT_TIMEOUT)
+        except (TypeError, ValueError):
+            self._json(400, {"error": {"message": "timeout must be a number",
+                                       "type": "invalid_request_error"}})
+            return
+        include_base64 = bool(payload.get("include_base64") or payload.get("base64"))
+        try:
+            result = execute_code(
+                code,
+                mode=self.mode or None,
+                timeout=timeout,
+                include_base64=include_base64,
+            )
+        except (ModeRequired, ModeViolation, UnknownMode) as exc:
+            self._refuse_tool(403, str(exc), {"error": {"message": str(exc), "type": "forbidden"}})
+            return
+        except CodeExecutionError as exc:
+            self._refuse_tool(
+                400, str(exc), {"error": {"message": str(exc), "type": "invalid_request_error"}}
+            )
+            return
+        self._json(200, result.to_dict())
 
     # -- planning -------------------------------------------------------------
 
@@ -403,13 +715,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self) -> None:
-        """Preflight for the embedded widget, read-only and local-only."""
+        """Preflight for the embedded widget, still local-only.
+
+        ``POST`` and the shutdown token header are allowed because an interface on
+        another loopback port (the common case) has to preflight before it can ask
+        ``/shutdown``: without them the browser blocks the request and the UI would
+        report a network failure for a route that is fine. What authorises the stop
+        is the token, not this answer — a foreign origin gets no CORS header at all.
+        """
         self.send_response(204)
         origin = self._cors_origin()
         if origin:
             self.send_header("Access-Control-Allow-Origin", origin)
-            self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "accept, content-type")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "accept, content-type, x-uhb-token")
             self.send_header("Access-Control-Max-Age", "600")
             self.send_header("Vary", "Origin")
         self.send_header("Content-Length", "0")
@@ -426,7 +745,13 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def make_server(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), Handler)
+    # One handler subclass per server: `owner` must point at *this* instance, and a
+    # shared class attribute would make every server in a process point at the last
+    # one created — the test suite builds several.
+    handler = type("BoundHandler", (Handler,), {"owner": None})
+    server = ThreadingHTTPServer((host, port), handler)
+    handler.owner = server
+    return server
 
 
 def serve(port: int = DEFAULT_PORT, host: str = DEFAULT_HOST) -> None:

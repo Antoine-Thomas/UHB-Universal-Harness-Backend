@@ -4,6 +4,13 @@
 #   docker compose up -d uhb siyuan # without the RAG (no index, no torch download)
 #   docker compose down
 #
+# One value is required: SIYUAN_AUTH_CODE. SiYuan 3.8.10 refuses to boot in a
+# container without an access code ("remote access requires at least one
+# authentication method"), so the stack asks for one instead of crash-looping.
+# Put it in a `.env` file next to this file (git-ignored), or prefix a command:
+#
+#   echo SIYUAN_AUTH_CODE=change-me > .env
+#
 # Every published port is bound to 127.0.0.1: this stack is local by design, and a
 # machine on the network must not reach your notes.
 #
@@ -20,10 +27,34 @@ services:
     ports:
       - "127.0.0.1:8101:8101"
     environment:
-      # A container cannot reach the host's 127.0.0.1: point it at host.docker.internal
-      # for a local Ollama, or leave it empty and let the router skip that provider.
+      # The ROUTER never reads these two: it resolves coordinates from the
+      # providers table in config.yaml (mounted below) and is the only thing
+      # `uhb run` consults. `UHB_LLM_BASE_URL` / `UHB_LLM_MODEL` are read by the
+      # wiki's direct LLM call (uhb/hub/wiki/scripts/__init__.py, `default_llm`),
+      # i.e. `uhb wiki ingest|query|lint` when the command runs WITHOUT a mode.
+      # The container's CMD is `uhb run`, so they only matter for
+      # `docker compose exec uhb uhb wiki ...`; a token, if the endpoint wants
+      # one, goes in UHB_LLM_TOKEN. Defaults point at the host's Ollama because
+      # 127.0.0.1 inside a container is the container itself.
       UHB_LLM_BASE_URL: ${UHB_LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       UHB_LLM_MODEL: ${UHB_LLM_MODEL:-qwen3:8b}
+      # The memory routes default to 127.0.0.1, which in here is this container:
+      # name the sibling services instead (compose DNS, not the published ports).
+      UHB_RAG_URL: http://rag:8200
+      SIYUAN_URL: http://siyuan:6806
+      # SiYuan's HTTP API authenticates with an API token, not with the access
+      # code: the kernel generates `api.token` inside the workspace conf on its
+      # first boot (`uhb/data/siyuan/conf/conf.json`). Copy it here to let
+      # /siyuan/blocks read content. Left unset, that route answers 400 saying
+      # exactly what is missing — it never reports "0 blocks" for a refusal.
+      SIYUAN_TOKEN: ${SIYUAN_API_TOKEN:-}
+      # The token a HOST process (UH, a script) must present to stop this server.
+      # Left empty, the container generates its own on first use: its own panel can
+      # then stop it, but nothing outside the container can — a host `uh web` falls
+      # back to terminating the process, exactly as before this route existed.
+      # Share it by exporting the same value before `docker compose up`, or by
+      # putting it in `.env`: `UHB_SHUTDOWN_TOKEN=<token from ~/.uhb/shutdown-token>`.
+      UHB_SHUTDOWN_TOKEN: ${UHB_SHUTDOWN_TOKEN:-}
       # The harness binary lives on the host; mount it or leave this unset.
       UHB_HERMES_BIN: ${UHB_HERMES_BIN:-}
       UHB_CONFIG: /app/config.yaml
@@ -47,12 +78,13 @@ services:
 
   siyuan:
     image: b3log/siyuan:v3.8.10
-    # Since 3.8.x the kernel requires the explicit `serve` subcommand.
+    # Since 3.8.x the kernel requires the explicit `serve` subcommand, and since
+    # 3.8.10 it also refuses to boot in Docker with an empty access code.
     command:
       - serve
       - --workspace=/siyuan/workspace/
       - --port=6806
-      - --accessAuthCode=${SIYUAN_AUTH_CODE:-}
+      - --accessAuthCode=${SIYUAN_AUTH_CODE:?set SIYUAN_AUTH_CODE in a .env file next to docker-compose.yml — SiYuan 3.8.10 refuses to boot in Docker without an access code}
     ports:
       - "127.0.0.1:6806:6806"
     volumes:
