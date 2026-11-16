@@ -366,3 +366,92 @@ def test_a_body_naming_another_mode_is_refused_and_journaled(http_server, capsys
     assert "serves mode" in data["error"]["message"]
     journal = capsys.readouterr().out
     assert "[uhb] tools/execute refused (403)" in journal
+
+
+# --------------------------------------------------------------------------- #
+# P0-4: le bac à sable et la vérification d'effet
+# --------------------------------------------------------------------------- #
+def test_the_snippet_cannot_read_the_operator_credentials(http_server, monkeypatch) -> None:
+    """The one that matters: a tool that runs Python must not inherit the keys.
+
+    `_child_env` allow-lists the environment, so this is a property, not a wish —
+    and a property is only real when a snippet has actually tried to read them.
+    """
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-should-never-be-visible")
+    monkeypatch.setenv("UHB_SHUTDOWN_TOKEN", "token-should-never-be-visible")
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post("/tools/execute", {
+        "code": (
+            "import os\n"
+            "for name in ('DEEPSEEK_API_KEY', 'UHB_SHUTDOWN_TOKEN', 'GH_TOKEN', 'AWS_SECRET_ACCESS_KEY'):\n"
+            "    print(name, '=', repr(os.environ.get(name)))\n"
+        )
+    })
+
+    assert status == 200
+    assert data["ok"] is True
+    assert "sk-should-never-be-visible" not in data["stdout"]
+    assert "token-should-never-be-visible" not in data["stdout"]
+    assert "None" in data["stdout"], "the variables are absent, not blank"
+
+
+def test_the_run_directory_is_the_working_home(http_server, tmp_path: Path) -> None:
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post("/tools/execute", {
+        "code": "import os, pathlib; print(pathlib.Path.cwd()); print(os.environ['HOME'])"
+    })
+
+    assert status == 200
+    assert data["run_dir"] in data["stdout"], "cwd and HOME are the run directory"
+
+
+def test_a_declared_effect_that_happens_is_verified(http_server) -> None:
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post("/tools/execute", {
+        "code": "open('out.txt','w').write('x'); print('saved')",
+        "expect": {"file": "out.txt", "stdout_contains": "saved"},
+    })
+
+    assert status == 200
+    assert data["ok"] is True
+    assert data["verified"] is True
+    assert data["post_state"]["checks"] == {"file": True, "stdout": True}
+
+
+def test_a_declared_effect_that_does_not_happen_is_a_failure(http_server) -> None:
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post("/tools/execute", {
+        "code": "print('nothing written')",
+        "expect": {"file": "missing.png"},
+    })
+
+    assert status == 200, "the code ran: this is a result, not an HTTP error"
+    assert data["ok"] is False
+    assert data["verified"] is False
+    assert data["reason"]["code"] == "post_state_mismatch"
+    assert data["reason"]["checks"] == {"file": False}
+
+
+def test_without_a_declared_effect_no_claim_is_made(http_server) -> None:
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post("/tools/execute", {"code": "print('hello')"})
+
+    assert status == 200
+    assert "post_state" not in data, "no expectation, no claim"
+    assert "verified" not in data
+
+
+def test_a_timeout_is_reported_not_hidden(http_server) -> None:
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post("/tools/execute",
+                                    {"code": "import time; time.sleep(30)", "timeout": 1})
+
+    assert status == 200
+    assert data["ok"] is False
+    assert data["timed_out"] is True

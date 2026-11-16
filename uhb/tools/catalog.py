@@ -89,6 +89,22 @@ EXECUTE_CODE = ToolSpec(
                 "description": "Return produced images inline as data URLs instead of paths only.",
                 "default": False,
             },
+            "expect": {
+                "type": "object",
+                "description": (
+                    "Optional effect to verify after the run: {file, stdout_contains}. "
+                    "Absent, no claim of success beyond the exit code is made; a "
+                    "declared effect that did not happen answers ok:false with "
+                    "reason.code post_state_mismatch."
+                ),
+                "properties": {
+                    "file": {"type": "string",
+                             "description": "File name expected inside the run directory."},
+                    "stdout_contains": {"type": "string",
+                                        "description": "Text expected in stdout."},
+                },
+                "additionalProperties": False,
+            },
         },
         "required": ["code"],
         "additionalProperties": False,
