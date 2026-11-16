@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -181,6 +182,10 @@ def test_our_listener_is_asked_to_leave_then_verified_gone() -> None:
     steps = sd.stop_local(
         ports=(8200,), runner=runner, lister=lambda port: [sd.Listener(port, 333, "python.exe")],
         sleeper=lambda _s: None,
+        # POSIX signals a real pid unless it is given something else. CI taught this
+        # the hard way: pid 333 belonged to another process, and the test reported
+        # "cannot signal" instead of the behaviour it was written to prove.
+        signaller=lambda pid, sig: state.__setitem__("alive", False),
     )
 
     assert steps[0].ok is True
@@ -203,14 +208,42 @@ def test_a_stubborn_listener_is_forced_after_the_grace() -> None:
             return 0, '"444","python.exe","1234","Console","1","10 K"', ""  # never dies
         return 0, "", ""
 
+    signals: list[int] = []
+
     steps = sd.stop_local(
         ports=(8101,), runner=runner, lister=lambda port: [sd.Listener(port, 444, "python.exe")],
         sleeper=lambda _s: None,
+        signaller=lambda pid, sig: signals.append(sig),
     )
 
-    assert forced and "/F" in forced[0]
     assert steps[0].ok is False, "a process that survives the kill must be reported, not hidden"
     assert "STILL ALIVE" in steps[0].detail
+    if os.name == "nt":
+        assert forced and "/F" in forced[0]
+    else:
+        assert signals == [15, 9], "polite first, then firm - and never a real pid"
+
+
+def test_the_posix_path_never_signals_a_pid_it_was_not_given(monkeypatch) -> None:
+    """The defect CI found: the fake lister was honoured, the signal was not."""
+    if os.name == "nt":
+        pytest.skip("the Windows path goes through taskkill, which is already injected")
+
+    def boom(pid, sig):
+        raise AssertionError(f"os.kill({pid}, {sig}) reached a real process")
+
+    monkeypatch.setattr(sd.os, "kill", boom)
+    seen: list[tuple[int, int]] = []
+
+    steps = sd.stop_local(
+        ports=(8101,), runner=lambda argv, cwd: (0, "", ""),
+        lister=lambda port: [sd.Listener(port, 999999, "python.exe")],
+        sleeper=lambda _s: None,
+        signaller=lambda pid, sig: seen.append((pid, sig)),
+    )
+
+    assert seen and seen[0] == (999999, 15)
+    assert steps[0].ok is False, "a pid that is still alive is reported, not hidden"
 
 
 def test_an_unknown_target_is_refused() -> None:

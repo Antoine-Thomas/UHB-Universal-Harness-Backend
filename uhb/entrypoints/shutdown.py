@@ -32,11 +32,11 @@ import hmac
 import os
 import secrets
 import subprocess
-import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 #: Ports this stack publishes. A listener here is a candidate, not a target.
 STACK_PORTS: tuple[int, ...] = (8101, 8200, 6806)
@@ -68,6 +68,9 @@ OURS = frozenset(
 
 #: ``(argv, cwd) -> (returncode, stdout, stderr)``. Injectable so tests run no Docker.
 Runner = Callable[[list[str], Path | None], tuple[int, str, str]]
+#: ``(pid, signal) -> None``. Injectable for the same reason the runner is:
+#: a test must not signal a real pid it never owned.
+Signaller = Callable[[int, int], None]
 #: ``(port) -> [Listener]``. Injectable so tests kill nothing.
 Lister = Callable[[int], list["Listener"]]
 
@@ -364,16 +367,27 @@ def _alive(pid: int, *, runner: Runner) -> bool:
 
 
 def _stop_listener(
-    listener: Listener, *, runner: Runner, sleeper: Callable[[float], None]
+    listener: Listener,
+    *,
+    runner: Runner,
+    sleeper: Callable[[float], None],
+    signaller: Signaller | None = None,
 ) -> Step:
-    """Ask nicely, wait :data:`GRACE_SECONDS`, then force. Verify, do not assume."""
+    """Ask nicely, wait :data:`GRACE_SECONDS`, then force. Verify, do not assume.
+
+    On POSIX the signal is a real ``os.kill`` — which is why it is injectable. A
+    test that fakes the process list but signals a real pid either kills something
+    on the machine or fails on a pid that belongs to another process, and both
+    happened in CI before this parameter existed.
+    """
     label = f"{listener.name} (pid {listener.pid}) on port {listener.port}"
+    send = signaller or os.kill
     if os.name == "nt":
         # No /F: a graceful request first, exactly like a window close.
         runner(["taskkill", "/PID", str(listener.pid), "/T"], None)
     else:
         try:
-            os.kill(listener.pid, 15)
+            send(listener.pid, 15)
         except OSError as exc:
             return Step("local", f"{label}: cannot signal ({type(exc).__name__})", False)
     waited = 0.0
@@ -386,7 +400,7 @@ def _stop_listener(
         runner(["taskkill", "/F", "/T", "/PID", str(listener.pid)], None)
     else:
         try:
-            os.kill(listener.pid, 9)
+            send(listener.pid, 9)
         except OSError as exc:
             return Step("local", f"{label}: refused to die ({type(exc).__name__})", False)
     sleeper(0.2)
@@ -421,11 +435,13 @@ def stop_local(
     runner: Runner | None = None,
     lister: Lister | None = None,
     sleeper: Callable[[float], None] = time.sleep,
+    signaller: Signaller | None = None,
 ) -> list[Step]:
     """Stop every recognisable listener on our ports, politely then firmly."""
     discovered = plan(targets=("local",), ports=ports, runner=runner, lister=lister)
     steps = [
-        _stop_listener(listener, runner=runner or _default_runner, sleeper=sleeper)
+        _stop_listener(listener, runner=runner or _default_runner, sleeper=sleeper,
+                       signaller=signaller)
         for listener in discovered.listeners
     ]
     steps += [
@@ -480,16 +496,16 @@ def shutdown(
 __all__ = [
     "DEFAULT_TARGETS",
     "GRACE_SECONDS",
-    "Listener",
     "OURS",
-    "Plan",
     "STACK_PORTS",
-    "ShutdownError",
-    "Step",
     "TARGETS",
     "TOKEN_ENV",
     "TOKEN_FILE_ENV",
     "TOKEN_HEADER",
+    "Listener",
+    "Plan",
+    "ShutdownError",
+    "Step",
     "compose_containers",
     "in_container",
     "is_ours",
