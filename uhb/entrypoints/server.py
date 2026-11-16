@@ -347,6 +347,16 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- tools ----------------------------------------------------------------
 
+    def _refuse_tool(self, status: int, reason: str, payload: dict[str, Any]) -> None:
+        """Answer a refusal, and journal it: a 403 nobody logged is a bug nobody sees.
+
+        Only the reason and the server's mode are written - never the code, never a
+        secret. The reason is the message the client already receives, so the log
+        and the answer cannot drift apart.
+        """
+        print(f"[uhb] tools/execute refused ({status}): {reason} [mode={self.mode}]", flush=True)
+        self._json(status, payload)
+
     def _tools_execute(self, payload: dict[str, Any]) -> None:
         """Serve ``POST /tools/execute``: run a snippet as the server's own mode.
 
@@ -364,10 +374,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         requested = str(payload.get("mode") or "").strip()
         if requested and requested != self.mode:
-            self._json(403, {"error": {
-                "message": f"this server serves mode {self.mode!r}; restart it with "
-                           f"--mode {requested} to execute on its behalf",
-                "type": "forbidden"}})
+            reason = (f"this server serves mode {self.mode!r}; restart it with "
+                      f"--mode {requested} to execute on its behalf")
+            self._refuse_tool(403, reason, {"error": {"message": reason, "type": "forbidden"}})
             return
         try:
             timeout = float(payload.get("timeout") or TOOL_DEFAULT_TIMEOUT)
@@ -384,10 +393,12 @@ class Handler(BaseHTTPRequestHandler):
                 include_base64=include_base64,
             )
         except (ModeRequired, ModeViolation, UnknownMode) as exc:
-            self._json(403, {"error": {"message": str(exc), "type": "forbidden"}})
+            self._refuse_tool(403, str(exc), {"error": {"message": str(exc), "type": "forbidden"}})
             return
         except CodeExecutionError as exc:
-            self._json(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
+            self._refuse_tool(
+                400, str(exc), {"error": {"message": str(exc), "type": "invalid_request_error"}}
+            )
             return
         self._json(200, result.to_dict())
 

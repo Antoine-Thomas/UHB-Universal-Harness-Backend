@@ -332,3 +332,37 @@ def test_the_cli_refuses_a_mode_without_the_tool(capsys: pytest.CaptureFixture[s
 
     assert cli.main(["tools", "exec", "--mode", "chat", "-c", "print(1)"]) == cli.EXIT_USAGE
     assert "execute_code" in capsys.readouterr().err
+
+
+def test_a_refusal_is_typed_and_written_to_the_journal(http_server, capsys) -> None:
+    """UHB is the authority: a mode without `execute_code` gets 403, and says so.
+
+    The refusal used to be answered without a trace: an operator reading the log
+    could not tell a client that was refused from one that never called. The line
+    names the mode and the reason, and never the snippet.
+    """
+    http_server.serve_mode("chat")
+
+    status, data = http_server.post("/tools/execute", {"code": "print('secret-payload')"})
+
+    assert status == 403
+    assert data["error"]["type"] == "forbidden"
+    assert "execute_code" in data["error"]["message"]
+    journal = capsys.readouterr().out
+    assert "[uhb] tools/execute refused (403)" in journal
+    assert "[mode=chat]" in journal
+    assert "secret-payload" not in journal, "the snippet must never reach the journal"
+
+
+def test_a_body_naming_another_mode_is_refused_and_journaled(http_server, capsys) -> None:
+    """`uhb run --mode chat` must not run dev work because a client asked nicely."""
+    http_server.serve_mode("chat")
+
+    status, data = http_server.post(
+        "/tools/execute", {"code": "print(1)", "mode": "dev"}
+    )
+
+    assert status == 403
+    assert "serves mode" in data["error"]["message"]
+    journal = capsys.readouterr().out
+    assert "[uhb] tools/execute refused (403)" in journal
