@@ -73,10 +73,35 @@ def test_a_https_url_is_opened(monkeypatch) -> None:
 
 
 def test_an_unknown_ref_is_never_clicked() -> None:
+    """Without a backend the answer is `backend_missing`, never a click.
+
+    The stale-ref logic is checked below, on `_resolve`, so the guarantee is tested
+    on a machine with no accessibility backend too — CI taught that the hard way.
+    """
     result = desktop.click("deadbeef:0")
 
     assert result["ok"] is False
-    assert result["reason"]["code"] == "stale_ref"
+    assert result["reason"]["code"] in {"stale_ref", "backend_missing"}
+
+
+def test_resolve_refuses_a_snapshot_it_no_longer_holds() -> None:
+    node, error = desktop._resolve("deadbeef:0")
+
+    assert node is None
+    assert error is not None
+    assert error["reason"]["code"] == "stale_ref"
+    assert error["reason"]["ref"] == "deadbeef:0"
+
+
+def test_resolve_refuses_a_ref_from_another_snapshot() -> None:
+    read = desktop.snapshot(max_nodes=5)
+    if not read.get("ok"):
+        pytest.skip(f"no accessibility backend: {read.get('reason')}")
+
+    node, error = desktop._resolve("00000000:0")
+
+    assert node is None
+    assert error is not None and error["reason"]["code"] == "stale_ref"
 
 
 def test_find_without_text_asks_for_text() -> None:
