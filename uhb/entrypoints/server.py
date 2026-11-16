@@ -28,6 +28,7 @@ import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -97,6 +98,35 @@ TOOL_REFUSAL_STATUS = {
     "browser_failed": 502,
     "browser_refused": 502,
 }
+
+
+def _post_state(result: dict[str, Any], expect: dict[str, Any]) -> dict[str, Any]:
+    """Compare the effect the caller declared with the effect that happened.
+
+    Absent when nothing was declared — an empty "verified: true" would be a claim
+    nobody made. A mismatch is not a crash: the code ran, the effect did not, and
+    the answer says which check failed.
+    """
+    run_dir = Path(str(result.get("run_dir") or ""))
+    checks: dict[str, bool] = {}
+    wanted_file = str(expect.get("file") or "").strip()
+    if wanted_file:
+        checks["file"] = (run_dir / wanted_file).exists()
+    if expect.get("stdout_contains") is not None:
+        checks["stdout"] = str(expect["stdout_contains"]) in str(result.get("stdout") or "")
+    if not checks:
+        return {}
+    verified = all(checks.values())
+    payload: dict[str, Any] = {"post_state": {"checks": checks, "verified": verified},
+                               "verified": verified}
+    if not verified:
+        payload["ok"] = False
+        payload["reason"] = {
+            "code": "post_state_mismatch",
+            "hint": "the code ran, but the effect you declared did not happen",
+            "checks": checks,
+        }
+    return payload
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -549,7 +579,13 @@ class Handler(BaseHTTPRequestHandler):
                 400, str(exc), {"error": {"message": str(exc), "type": "invalid_request_error"}}
             )
             return
-        self._json(200, result.to_dict())
+        answer = result.to_dict()
+        expectation = payload.get("expect")
+        if isinstance(expectation, dict) and expectation:
+            # `run_dir` is in the answer either way: it is where the effect had to
+            # happen, and the caller may legitimately want to look at it.
+            answer.update(_post_state(answer, expectation))
+        self._json(200, answer)
 
     # -- planning -------------------------------------------------------------
 
