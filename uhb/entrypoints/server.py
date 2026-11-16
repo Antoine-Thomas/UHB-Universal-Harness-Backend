@@ -36,7 +36,7 @@ from ..core.executor import Executor
 from ..core.health import Health
 from ..core.router import Router
 from ..core.types import StreamEvent, TaskContext
-from ..hub.modes import ModesError, UnknownMode, get_mode, load_modes
+from ..hub.modes import ModesError, ModeRequired, ModeViolation, UnknownMode, get_mode, load_modes
 from ..hub.router import (
     COMPLEXITIES,
     InvalidCatalog,
@@ -48,13 +48,16 @@ from . import memory_routes
 from .panel import manual_path, status_payload
 from .panel import render as render_panel
 from .status import providers_facts
+from ..tools.execute import DEFAULT_TIMEOUT as TOOL_DEFAULT_TIMEOUT
+from ..tools.execute import CodeExecutionError, execute_code
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8101
 
 #: POST routes. They share the visitor checks (Origin, Content-Type) and
 #: nothing else: `/route` plans a turn, it does not run one.
-POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex")
+POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex",
+               "/tools/execute")
 
 
 def _last_user_text(messages: list[dict[str, Any]]) -> str:
@@ -219,6 +222,8 @@ class Handler(BaseHTTPRequestHandler):
             self._plan(payload)
         elif path == "/rag/reindex":
             self._rag_reindex(payload)
+        elif path == "/tools/execute":
+            self._tools_execute(payload)
         elif path == "/v1/chat/completions":
             self._openai(payload)
         else:
@@ -238,6 +243,52 @@ class Handler(BaseHTTPRequestHandler):
             self._json(exc.status, {"error": {"message": str(exc), "type": "memory"}})
             return
         self._json(200, result)
+
+    # -- tools ----------------------------------------------------------------
+
+    def _tools_execute(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /tools/execute``: run a snippet as the server's own mode.
+
+        Two refusals matter here. The mode is the one the server was started
+        with: a body naming another mode gets 403, because otherwise
+        ``uhb run --mode chat`` would hand execution to any client that asked for
+        ``"mode": "dev"`` and the envelope would mean nothing. And a mode whose
+        ``tools`` list has no ``execute_code`` (chat, review, observe) gets 403
+        from the tool itself, before a byte is written.
+        """
+        code = payload.get("code")
+        if not isinstance(code, str) or not code.strip():
+            self._json(400, {"error": {"message": "code must be a non-empty string",
+                                       "type": "invalid_request_error"}})
+            return
+        requested = str(payload.get("mode") or "").strip()
+        if requested and requested != self.mode:
+            self._json(403, {"error": {
+                "message": f"this server serves mode {self.mode!r}; restart it with "
+                           f"--mode {requested} to execute on its behalf",
+                "type": "forbidden"}})
+            return
+        try:
+            timeout = float(payload.get("timeout") or TOOL_DEFAULT_TIMEOUT)
+        except (TypeError, ValueError):
+            self._json(400, {"error": {"message": "timeout must be a number",
+                                       "type": "invalid_request_error"}})
+            return
+        include_base64 = bool(payload.get("include_base64") or payload.get("base64"))
+        try:
+            result = execute_code(
+                code,
+                mode=self.mode or None,
+                timeout=timeout,
+                include_base64=include_base64,
+            )
+        except (ModeRequired, ModeViolation, UnknownMode) as exc:
+            self._json(403, {"error": {"message": str(exc), "type": "forbidden"}})
+            return
+        except CodeExecutionError as exc:
+            self._json(400, {"error": {"message": str(exc), "type": "invalid_request_error"}})
+            return
+        self._json(200, result.to_dict())
 
     # -- planning -------------------------------------------------------------
 

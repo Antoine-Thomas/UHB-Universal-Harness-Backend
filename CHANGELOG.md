@@ -13,6 +13,19 @@ Versions are read from `uhb/__init__.py` by `pyproject.toml`
 
 ### Added
 
+- `execute_code`, the first tool in `uhb/tools/`: it writes a Python snippet to
+  its own run directory, executes it with the interpreter that hosts UHB, and
+  reports the streams, the exit code and **the images the snippet produced** —
+  path, MIME, size, and an optional `data:` URL for a UI to display. Images are
+  discovered by snapshotting the directory, so `savefig("figs/plot.png")` is
+  found without declaring anything.
+- `POST /tools/execute` and `uhb tools exec`: the same tool over HTTP and on the
+  command line. The mode is the gate — `execute_code` must be in the mode's
+  `tools` list, `dev` carries it, and the route refuses a body that names another
+  mode than the server's own, so `--mode chat` cannot be escalated by a request.
+  The child gets an allow-listed environment (no provider key reaches a
+  transcript), `MPLBACKEND=Agg`, a timeout that kills the process tree, and
+  truncated streams that say how much was dropped.
 - `GET /modes`: the permissions of each mode as data, so a client can choose one
   before spending a turn.
 - `POST /route`: the plan (complexity, signals, ordered model chain, reason)

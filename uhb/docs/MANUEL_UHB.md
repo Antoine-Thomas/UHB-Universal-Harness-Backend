@@ -82,16 +82,18 @@ Doit afficher la version, le commit git, les fournisseurs avec `key_env` et l'é
 | --- | --- |
 | `uhb run [--mode chat] [--port 8101]` | démarre le point d'entrée HTTP |
 | `uhb execute "<prompt>" --mode dev` | un tour complet via le harness configuré |
+| `uhb tools exec -f script.py --mode dev` | exécute un extrait Python et rapporte les images écrites |
 | `uhb config set <clé> <valeur>` | écrit une clé de configuration |
 | `uhb update [--dry-run]` | avance en fast-forward depuis le dépôt distant |
 
-`uhb run` sert trois surfaces :
+`uhb run` sert six surfaces :
 
 - `POST /v1/chat/completions` — forme OpenAI (streaming accepté)
 - `POST /v1/messages` — forme Anthropic
 - `GET /` — panneau de contrôle UHB (état, accès rapide, manuel)
 - `GET /status` — état en JSON
 - `GET /docs/manuel.pdf` — ce manuel
+- `POST /tools/execute` — exécute un extrait Python pour le mode du serveur et rend les images produites
 
 ---
 
@@ -216,6 +218,7 @@ Variables reconnues :
 | `UHB_MODES_DIR` | dossier de profils de modes supplémentaire |
 | `UHB_ROUTER_CATALOG` | catalogue de routage alternatif |
 | `UHB_HERMES_BIN` | binaire du harness (nom, chemin, ou préfixe argv) |
+| `UHB_RUNS_DIR` | dossier des exécutions de `execute_code` (défaut : `~/.uhb/runs`) |
 
 ---
 

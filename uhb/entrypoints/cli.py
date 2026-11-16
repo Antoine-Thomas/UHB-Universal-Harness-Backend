@@ -1,7 +1,7 @@
 """``uhb`` — the command line.
 
-Seven commands, in two families. Read-only: ``status``, ``config``, ``modes``,
-``providers``, ``health``. Acting: ``execute``, ``run``, ``update``.
+Two families. Read-only: ``status``, ``config``, ``modes``, ``providers``,
+``health``. Acting: ``execute``, ``run``, ``update``, ``tools exec``.
 
 Nothing here prints an environment value. A provider's key is reported as
 ``loaded`` or ``MISSING``, next to the *variable name* — never the value, never
@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from .. import __version__
@@ -24,6 +25,8 @@ from ..core.router import Router
 from ..core.types import TaskContext
 from ..hub.modes import ModesError, ModeSpec, get_mode, load_modes
 from ..hub.router import select_model
+from ..tools.execute import DEFAULT_TIMEOUT as TOOL_DEFAULT_TIMEOUT
+from ..tools.execute import CodeExecutionError, execute_code
 from . import panel, settings, status as status_module, update as update_module
 from ..adapters.second_brain import SecondBrainError
 
@@ -114,6 +117,23 @@ def build_parser() -> argparse.ArgumentParser:
 
     health = sub.add_parser("health", help="report backend health")
     health.add_argument("--workspace", default="")
+
+    tools = sub.add_parser("tools", help="tools a turn may call, gated by the mode")
+    tools_sub = tools.add_subparsers(dest="tools_command", required=True)
+    tools_exec = tools_sub.add_parser(
+        "exec", help="run a Python snippet as the execute_code tool, and report its images"
+    )
+    source = tools_exec.add_mutually_exclusive_group(required=True)
+    source.add_argument("-c", "--code", help="the snippet, inline")
+    source.add_argument("-f", "--file", help="a file to run")
+    tools_exec.add_argument(
+        "--mode", required=True,
+        help="execution mode; its 'tools' list must carry execute_code (dev does)",
+    )
+    tools_exec.add_argument("--timeout", type=float, default=TOOL_DEFAULT_TIMEOUT)
+    tools_exec.add_argument("--base64", action="store_true",
+                            help="inline each image as a data: URL")
+    tools_exec.add_argument("--json", action="store_true")
 
     sub.add_parser("providers", help="list configured providers")
 
@@ -227,6 +247,39 @@ def _run(args: argparse.Namespace) -> int:
     print()
     server_module.serve(port=args.port, host=args.host)
     return EXIT_OK
+
+
+def _tools(args: argparse.Namespace) -> int:
+    """Run one snippet through the ``execute_code`` tool, as the given mode."""
+    if args.code is not None:
+        code = args.code
+    else:
+        try:
+            code = Path(args.file).read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"[uhb] cannot read {args.file}: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+    result = execute_code(
+        code, mode=args.mode, timeout=args.timeout, include_base64=args.base64
+    )
+    if args.json:
+        print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+        return EXIT_OK if result.ok else EXIT_FAIL
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr)
+    for note in result.notes:
+        print(f"[uhb] {note}", file=sys.stderr)
+    for image in result.images:
+        print(f"image   {image.path}  ({image.mime}, {image.size} bytes)")
+    print(
+        f"[uhb] mode {result.mode} · exit {result.exit_code} · {result.duration_s}s"
+        + (" · TIMED OUT" if result.timed_out else "")
+        + f" · {result.run_dir}",
+        file=sys.stderr,
+    )
+    return EXIT_OK if result.ok else EXIT_FAIL
 
 
 def _brain(args: argparse.Namespace) -> int:
@@ -495,11 +548,14 @@ def main(argv: list[str] | None = None) -> int:
             return _docs(args)
         if args.command == "health":
             return asyncio.run(_health(args))
+        if args.command == "tools":
+            return _tools(args)
         if args.command == "run":
             return _run(args)
         if args.command == "update":
             return _update(args)
-    except (settings.SettingsError, update_module.UpdateError, ModesError, SecondBrainError) as exc:
+    except (settings.SettingsError, update_module.UpdateError, ModesError,
+            SecondBrainError, CodeExecutionError) as exc:
         print(f"[uhb] {exc}", file=sys.stderr)
         return EXIT_USAGE
     return EXIT_USAGE

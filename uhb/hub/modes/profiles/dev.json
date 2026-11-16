@@ -5,7 +5,7 @@
   "read": ["**"],
   "write": ["uhb/**", "tests/**", "docs/**", "MEMORY.md", "memory.md", "CLAUDE.md"],
   "deny": ["**/.env", "**/.env.*", "**/*.key", "**/*.pem", "**/secrets/**", "**/credentials/**"],
-  "tools": ["read_file", "write_file", "patch", "search", "git", "run_tests"],
+  "tools": ["read_file", "write_file", "patch", "search", "git", "run_tests", "execute_code"],
   "system_prompt": "You change code in an existing repository. Read before you write, and keep the diff to what the task needs.",
   "constraints": [
     "Never read or print a credential file: .env, keys, tokens.",

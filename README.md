@@ -111,6 +111,7 @@ uhb update                      # git pull --ff-only, then prove it
 uhb docs                        # path and URL of the embedded manual
 uhb brain status                # RAG (8200), SiYuan (6806), MARI (55553)
 uhb brain search "Bridge MARI"  # ask your own notes, through the local RAG
+uhb tools exec --mode dev -f chart.py  # run a snippet; report the images it wrote
 ```
 
 The `brain` group reads the local second brain when it exists — RAG on 8200, SiYuan
@@ -126,6 +127,7 @@ a backend nobody trusts:
 | `GET /` | panel: a discreet **9+ UHB** badge (green/orange dot), a modal with the six commands that matter, and the manual download |
 | `GET /status` | `connected`, `version`, `mode`, `harness`, providers with `key_loaded`, modes, docs URLs |
 | `GET /docs/manuel.pdf` · `/docs/manual.pdf` | the manual (French · English), `application/pdf`, as an attachment |
+| `POST /tools/execute` | runs a Python snippet as the server's own mode: streams, exit code, and the images it produced (path, MIME, optional `data:` URL) |
 
 The panel is one self-contained HTML page: no CDN, no font download, no build step.
 Embed the whole page in a dashboard with an iframe if you want the status view.
@@ -135,6 +137,39 @@ overlay sized to its viewport, so an iframe the size of the badge clips it.
 `uhb status` never prints a credential: a provider's key is reported as `loaded` or
 `MISSING`, next to the variable **name**. `uhb config set` refuses any key whose
 last segment looks like a secret — a token value never enters a file.
+
+### The code execution tool
+
+Asked for a chart, a model writes matplotlib code and stops there. `execute_code`
+is the missing step, and it belongs in the backend, not in a prompt:
+
+```bash
+uhb tools exec --mode dev -f chart.py --base64 --json
+```
+
+```json
+{"ok": true, "exit_code": 0, "stdout": "saved sine.png\n", "duration_s": 1.19,
+ "images": [{"path": "~/.uhb/runs/run-20261116-000930-412f11/sine.png",
+             "relative": "sine.png", "mime": "image/png", "bytes": 39464,
+             "data_url": "data:image/png;base64,iVBORw0…"}]}
+```
+
+Three rules hold by construction, and each one is a test:
+
+- **the mode decides.** `execute_code` must be in the mode's `tools` list: `chat`,
+  `review` and `observe` refuse before a byte is written. `POST /tools/execute`
+  also refuses a body that names another mode than the one the server was started
+  with, so `--mode chat` cannot be escalated by a request;
+- **the child is scrubbed.** Allow-listed environment, the run directory as `HOME`,
+  `MPLBACKEND=Agg` so `savefig` works with no display. Every provider key in your
+  shell is dropped, so a snippet cannot print one into a transcript;
+- **nothing is silent.** A truncated stream says how many characters were dropped,
+  an image above 1.5 MB is described by its path instead of inlined, and the timeout
+  kills the process tree rather than leaving a child behind.
+
+It is **containment, not a security boundary**: the snippet runs as your user, with
+your filesystem. That is the point — plot my data, check this regex — and it is why
+the HTTP route stays on loopback. See `uhb/tools/README.md` for the full contract.
 
 `uhb update` has no `--force` and no `reset`. It fetches, refuses a dirty tree,
 fast-forwards only, and reports the commit before and after. If the branch has

@@ -83,6 +83,7 @@ state, the routing policy and the available modes.
 | --- | --- |
 | `uhb run [--mode chat] [--port 8101]` | start the HTTP entrypoint |
 | `uhb execute "<prompt>" --mode dev` | one full turn through the configured harness |
+| `uhb tools exec -f script.py --mode dev` | run a snippet and report the images it wrote |
 | `uhb config set <key> <value>` | write one configuration key |
 | `uhb update [--dry-run]` | fast-forward from the remote |
 
@@ -93,6 +94,7 @@ state, the routing policy and the available modes.
 - `GET /` — the UHB control panel (status badge, quick commands, manual download)
 - `GET /status` — state as JSON
 - `GET /docs/manuel.pdf` / `GET /docs/manual.pdf` — this manual, French and English
+- `POST /tools/execute` — run a Python snippet as the server's mode and return the images it produced
 
 ---
 
@@ -213,6 +215,7 @@ Recognised variables:
 | `UHB_MODES_DIR` | extra mode-profile directory |
 | `UHB_ROUTER_CATALOG` | alternative routing catalog |
 | `UHB_HERMES_BIN` | harness binary (name, path, or argv prefix) |
+| `UHB_RUNS_DIR` | run directory of `execute_code` (default: `~/.uhb/runs`) |
 
 ---
 
