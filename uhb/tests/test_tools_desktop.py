@@ -20,7 +20,7 @@ import threading
 
 import pytest
 
-from uhb.tools import catalog, desktop
+from uhb.tools import desktop
 
 pytestmark = pytest.mark.skipif(
     __import__("sys").platform != "win32",

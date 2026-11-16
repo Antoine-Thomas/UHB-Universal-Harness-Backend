@@ -22,8 +22,9 @@ it is told.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 from ..hub.modes import ModeSpec, UnknownMode, load_modes
 from . import desktop
@@ -334,8 +335,8 @@ __all__ = [
     "EXECUTE_CODE",
     "TOOLS",
     "ToolSpec",
-    "UnknownTool",
     "UnknownMode",
+    "UnknownTool",
     "describe",
     "get",
     "modes_declaring",

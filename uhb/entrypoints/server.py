@@ -38,7 +38,14 @@ from ..core.executor import Executor
 from ..core.health import Health
 from ..core.router import Router
 from ..core.types import StreamEvent, TaskContext
-from ..hub.modes import ModesError, ModeRequired, ModeViolation, UnknownMode, get_mode, load_modes
+from ..hub.modes import (
+    ModeRequired,
+    ModesError,
+    ModeViolation,
+    UnknownMode,
+    get_mode,
+    load_modes,
+)
 from ..hub.router import (
     COMPLEXITIES,
     InvalidCatalog,
@@ -47,13 +54,13 @@ from ..hub.router import (
     select_model,
 )
 from ..tools import catalog, desktop
+from ..tools.execute import DEFAULT_TIMEOUT as TOOL_DEFAULT_TIMEOUT
+from ..tools.execute import CodeExecutionError, execute_code
 from . import memory_routes
 from . import shutdown as shutdown_routes
 from .panel import manual_path, status_payload
 from .panel import render as render_panel
 from .status import providers_facts
-from ..tools.execute import DEFAULT_TIMEOUT as TOOL_DEFAULT_TIMEOUT
-from ..tools.execute import CodeExecutionError, execute_code
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8101

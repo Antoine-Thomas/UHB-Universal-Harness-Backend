@@ -26,8 +26,9 @@ from __future__ import annotations
 import sys
 import uuid
 import webbrowser
+from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import urlparse
 
 MAX_NODES = 250
@@ -56,7 +57,7 @@ def _ui() -> Any:
     if sys.platform != "win32":
         return None
     try:
-        import uiautomation  # noqa: PLC0415 - optional extra
+        import uiautomation
     except Exception:  # noqa: BLE001 - a missing extra is a state, not a crash
         return None
     return uiautomation
@@ -75,8 +76,8 @@ def backend_status() -> dict[str, Any]:
         "windows": ("backend_missing",
                     'install the optional extra: pip install "uhb[desktop]"'),
         "macos": ("platform_unavailable",
-                  "macOS accessibility is not wired in this build; a Python backend "
-                  "(AX) would be needed, plus the Accessibility grant"),
+                  ("macOS accessibility is not wired in this build; a Python backend "
+                   "(AX) would be needed, plus the Accessibility grant")),
         "linux": ("platform_unavailable",
                   "AT-SPI is not wired in this build; at-spi2-core would be needed"),
     }
