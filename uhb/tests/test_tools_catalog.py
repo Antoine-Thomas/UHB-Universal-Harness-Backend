@@ -194,6 +194,9 @@ def test_listing_is_not_a_permission() -> None:
 
     assert status == 403
     assert body["error"]["type"] == "forbidden"
+    assert "serves mode" in body["error"]["message"], (
+        "the refusal must be the server's mode, not a missing approval"
+    )
 
 
 def _restore(original: str) -> None:

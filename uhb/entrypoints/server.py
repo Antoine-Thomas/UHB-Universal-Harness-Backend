@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import secrets
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -69,7 +70,52 @@ DEFAULT_PORT = 8101
 #: POST routes. They share the visitor checks (Origin, Content-Type) and
 #: nothing else: `/route` plans a turn, it does not run one.
 POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex",
-               "/tools/execute", "/shutdown")
+               "/tools/execute", "/tools/approvals", "/shutdown")
+
+#: How long an approval stays usable, and why a nonce rather than a boolean: a body
+#: carrying `approved: true` proves nothing, since any client can send it. UHB issues
+#: the nonce, keeps it in memory, accepts it once, and forgets it on expiry. An
+#: interface can then only *carry* the operator's decision, never manufacture one.
+APPROVAL_TTL = 120.0
+#: `{nonce: (expiry, tool)}`. In memory on purpose: a restart asks again, and no
+#: permission decision is ever written to disk.
+_APPROVALS: dict[str, tuple[float, str]] = {}
+_APPROVALS_LOCK = threading.Lock()
+
+
+def issue_approval(tool: str, ttl: float = APPROVAL_TTL) -> dict[str, Any]:
+    """Mint a single-use approval for one tool call."""
+    nonce = secrets.token_urlsafe(24)
+    with _APPROVALS_LOCK:
+        _purge_expired()
+        _APPROVALS[nonce] = (time.monotonic() + max(1.0, ttl), tool)
+    return {"approval_id": nonce, "tool": tool, "expires_in": max(1.0, ttl)}
+
+
+def consume_approval(nonce: str, tool: str) -> bool:
+    """True once per nonce, and only for the tool it was minted for.
+
+    Consumed even when the answer is no: a nonce that could be retried after a
+    refusal is a permission that outlives the decision.
+    """
+    if not nonce:
+        return False
+    with _APPROVALS_LOCK:
+        _purge_expired()
+        entry = _APPROVALS.pop(nonce, None)
+    if entry is None:
+        return False
+    expiry, minted_for = entry
+    if expiry < time.monotonic():
+        return False
+    return minted_for == tool
+
+
+def _purge_expired() -> None:
+    now = time.monotonic()
+    for nonce in [key for key, (expiry, _tool) in _APPROVALS.items() if expiry < now]:
+        _APPROVALS.pop(nonce, None)
+
 
 #: The implementations behind `POST /tools/<name>`. One table, so the catalogue and
 #: the dispatch cannot disagree about what exists; a name in `catalog.TOOLS` with no
@@ -309,6 +355,8 @@ class Handler(BaseHTTPRequestHandler):
             self._rag_reindex(payload)
         elif path == "/tools/execute":
             self._tools_execute(payload)
+        elif path == "/tools/approvals":
+            self._tools_approvals(payload)
         elif path.startswith("/tools/"):
             self._tools_call(path.split("/", 2)[2], payload)
         elif path == "/shutdown":
@@ -536,15 +584,33 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[uhb] tools/execute refused ({status}): {reason} [mode={self.mode}]", flush=True)
         self._json(status, payload)
 
+    def _tools_approvals(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /tools/approvals``: mint the nonce a run must carry.
+
+        The interface asks for this only after the operator clicked. It is not a
+        permission on its own — the mode still decides, and the nonce is consumed by
+        the run it authorises — but without it ``/tools/execute`` refuses, so a
+        client that skips the interface cannot execute anything.
+        """
+        tool = str(payload.get("tool") or "execute_code").strip() or "execute_code"
+        if tool != "execute_code":
+            self._json(400, {"error": {"message": "only execute_code needs an approval",
+                                       "type": "invalid_request_error"}})
+            return
+        self._json(200, issue_approval(tool))
+
     def _tools_execute(self, payload: dict[str, Any]) -> None:
         """Serve ``POST /tools/execute``: run a snippet as the server's own mode.
 
-        Two refusals matter here. The mode is the one the server was started
+        Three refusals matter here. The mode is the one the server was started
         with: a body naming another mode gets 403, because otherwise
         ``uhb run --mode chat`` would hand execution to any client that asked for
-        ``"mode": "dev"`` and the envelope would mean nothing. And a mode whose
+        ``"mode": "dev"`` and the envelope would mean nothing. A mode whose
         ``tools`` list has no ``execute_code`` (chat, review, observe) gets 403
-        from the tool itself, before a byte is written.
+        from the tool itself, before a byte is written. And the call must carry an
+        approval nonce UHB minted and has not consumed yet: that is the check the
+        interface cannot skip for us, since a body claiming ``approved: true``
+        proves nothing.
         """
         code = payload.get("code")
         if not isinstance(code, str) or not code.strip():
@@ -556,6 +622,16 @@ class Handler(BaseHTTPRequestHandler):
             reason = (f"this server serves mode {self.mode!r}; restart it with "
                       f"--mode {requested} to execute on its behalf")
             self._refuse_tool(403, reason, {"error": {"message": reason, "type": "forbidden"}})
+            return
+        if not consume_approval(str(payload.get("approval_id") or ""), "execute_code"):
+            reason = ("execute_code needs an approval: POST /tools/approvals first, "
+                      "then send its approval_id with the code (single use, 120 s)")
+            self._refuse_tool(
+                403,
+                reason,
+                {"error": {"message": reason, "type": "forbidden",
+                           "code": "approval_required", "tool": "execute_code"}},
+            )
             return
         try:
             timeout = float(payload.get("timeout") or TOOL_DEFAULT_TIMEOUT)
