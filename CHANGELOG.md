@@ -9,7 +9,12 @@ After 1.0.0, a removed or renamed route is a major version.
 Versions are read from `uhb/__init__.py` by `pyproject.toml`
 (`dynamic = ["version"]`), so a release is one edit, one tag, one GitHub release.
 
-## [Unreleased] — target 1.0.0
+## [0.2.0] — 2026-11-17
+
+**The backend can be driven, and it can refuse.** This release gathers everything on `main`
+since `0.1.2`: the tool catalogue and desktop control, `execute_code` and its verified
+effect, the shutdown route with its power button, and the approval UHB mints and consumes
+before a snippet runs. The 1.0.0 target is unchanged as a plan; what ships today is 0.2.0.
 
 ### Added
 
