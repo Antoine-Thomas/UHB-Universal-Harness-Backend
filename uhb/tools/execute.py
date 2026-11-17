@@ -13,8 +13,10 @@ What is guaranteed
   read-only mode therefore cannot execute — that is a check, not a convention.
 * **The child gets a scrubbed environment.** An allow-list (``PATH``,
   ``SYSTEMROOT``, the temp directories) plus the run directory as ``HOME``.
-  Every API key present in the operator's shell is dropped, so a snippet cannot
-  read ``DEEPSEEK_API_KEY`` and print it into a transcript.
+  Every API key present in the operator's shell is dropped **from the environment**,
+  so a snippet cannot read ``DEEPSEEK_API_KEY`` and print it into a transcript.
+  This says nothing about the filesystem: see below, and
+  ``test_the_snippet_reaches_the_secret_files_by_absolute_path``.
 * **Output is capped, never silently.** A truncated stream says how much was
   dropped, and the result's ``notes`` say why each image was left out.
 * **A timeout kills the process tree**, not just the parent.
@@ -29,6 +31,15 @@ user with the operator's filesystem, on purpose: the ordinary use is "plot my
 data" or "check this regex". It is not a sandbox for hostile code, it does not
 seal the network, and on Windows the resource limits below do not exist at all —
 only the timeout does. Do not publish the HTTP route beyond loopback.
+
+Concretely, and measured by a test rather than assumed: the environment is
+scrubbed, the **files are not**. A snippet that names an absolute path can read
+``$UH_HOME/keys.toml``, ``$UH_HOME/web-token``, ``$UH_HOME/router-token`` and
+``~/.uhb/shutdown-token`` exactly as the operator can. Any claim about this tool
+must say "variables d'environnement non héritées", never "the token is not
+visible". The compensating controls are the mode gate (a mode must list
+``execute_code``), the operator's explicit opt-in (``UH_UHB_EXECUTE=1``), and an
+approval in the interface — not file permissions.
 """
 
 from __future__ import annotations

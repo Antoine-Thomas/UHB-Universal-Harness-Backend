@@ -138,16 +138,100 @@ def test_stdout_is_truncated_with_an_explicit_note() -> None:
 # the environment the snippet runs in
 # --------------------------------------------------------------------------- #
 def test_the_child_cannot_see_the_operator_keys(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A snippet must not be able to print a provider key into a transcript."""
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-live-DO-NOT-LEAK")
-    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-DO-NOT-LEAK")
+    """A snippet must not be able to print a provider key into a transcript.
 
-    result = execute_code("import os\nprint('\\n'.join(sorted(os.environ)))", mode="dev")
+    Two properties, both checked: no value leaks, and no variable *name* carrying a
+    secret word survives the allow-list at all. The last part matters — a variable
+    that is merely blanked still tells a snippet which account to target.
+    """
+    leaked = {
+        "DEEPSEEK_API_KEY": "sk-live-DO-NOT-LEAK-1",
+        "OPENROUTER_API_KEY": "or-live-DO-NOT-LEAK-2",
+        "ANTHROPIC_API_KEY": "ant-live-DO-NOT-LEAK-3",
+        "GH_TOKEN": "ghp-live-DO-NOT-LEAK-4",
+        "GITHUB_TOKEN": "github-live-DO-NOT-LEAK-5",
+        "AWS_SECRET_ACCESS_KEY": "aws-secret-LIVE-DO-NOT-LEAK-6",
+        "AWS_ACCESS_KEY_ID": "AKIALIVE-DO-NOT-LEAK-7",
+        "UHB_SHUTDOWN_TOKEN": "token-should-never-be-visible-8",
+        "UFW_PASSWORD": "pw-should-never-be-visible-9",
+        "SOME_CREDENTIAL": "cred-should-never-be-visible-10",
+    }
+    for name, value in leaked.items():
+        monkeypatch.setenv(name, value)
 
-    assert result.ok
-    assert "DEEPSEEK_API_KEY" not in result.stdout
-    assert "OPENROUTER_API_KEY" not in result.stdout
-    assert "DO-NOT-LEAK" not in result.stdout
+    names = ", ".join(repr(name) for name in leaked)
+    result = execute_code(
+        "import os\n"
+        f"names = ({names})\n"
+        "for name in names:\n"
+        "    print(name, '=', repr(os.environ.get(name)))\n"
+        "print('ENV', ' '.join(sorted(os.environ)))\n"
+        "print('PATH_PRESENT', 'PATH' in os.environ)\n",
+        mode="dev",
+    )
+
+    assert result.ok, result.stderr
+    for value in leaked.values():
+        assert value not in result.stdout, f"a value reached the transcript: {value}"
+    assert result.stdout.count("None") >= len(leaked), "the variables are absent, not blank"
+
+    environment_names = result.stdout.split("ENV ", 1)[1].splitlines()[0].split()
+    forbidden = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "ACCESS_KEY")
+    survivors = [name for name in environment_names if any(word in name for word in forbidden)]
+    assert survivors == [], f"variables whose name carries a secret word survived: {survivors}"
+    assert result.stdout.rstrip().endswith("PATH_PRESENT True"), (
+        "PATH still reaches the child: the scrub is an allow-list, not an emptied environment"
+    )
+
+
+def test_the_snippet_reaches_the_secret_files_by_absolute_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CHARACTERISATION: the environment is scrubbed, the filesystem is not.
+
+    This test asserts what the tool *does today*, so the guarantee cannot be
+    overstated in a report: the child runs as the operator's user, therefore every
+    file that user can open, it can open. A disposable ``UH_HOME`` and ``HOME`` hold
+    decoys — never the real ones — and the snippet prints them by absolute path.
+
+    When containment changes (restricted token, container, per-run secrets), this
+    test must be INVERTED, not deleted: the leak is the thing being measured.
+    """
+    uh_home = tmp_path / "uh-home"
+    home = tmp_path / "home"
+    (home / ".uhb").mkdir(parents=True)
+    uh_home.mkdir()
+
+    decoys = {
+        uh_home / "keys.toml": 'deepseek = "sk-decoy-KEYS-TOML"\n',
+        uh_home / "web-token": "WEB-TOKEN-DECOY\n",
+        uh_home / "router-token": "ROUTER-TOKEN-DECOY\n",
+        home / ".uhb" / "shutdown-token": "SHUTDOWN-TOKEN-DECOY\n",
+    }
+    for path, content in decoys.items():
+        path.write_text(content, encoding="utf-8", newline="\n")
+
+    monkeypatch.setenv("UH_HOME", str(uh_home))
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+
+    code = (
+        "from pathlib import Path\n"
+        f"targets = {[str(path) for path in decoys]!r}\n"
+        "for raw in targets:\n"
+        "    path = Path(raw)\n"
+        "    try:\n"
+        "        print(path.name, '=', path.read_text(encoding='utf-8').strip())\n"
+        "    except OSError as exc:\n"
+        "        print(path.name, 'UNREADABLE', exc.__class__.__name__)\n"
+    )
+    result = execute_code(code, mode="dev")
+
+    assert result.ok, result.stderr
+    assert "UNREADABLE" not in result.stdout, "the files exist; a read must succeed"
+    for marker in ("sk-decoy-KEYS-TOML", "WEB-TOKEN-DECOY", "ROUTER-TOKEN-DECOY",
+                   "SHUTDOWN-TOKEN-DECOY"):
+        assert marker in result.stdout, f"{marker} is NOT protected by the sandbox"
 
 
 def test_the_child_gets_a_headless_matplotlib_and_a_private_home() -> None:
