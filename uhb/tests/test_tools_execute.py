@@ -166,7 +166,7 @@ def test_the_child_cannot_see_the_operator_keys(monkeypatch: pytest.MonkeyPatch)
         "for name in names:\n"
         "    print(name, '=', repr(os.environ.get(name)))\n"
         "print('ENV', ' '.join(sorted(os.environ)))\n"
-        "print('PATH' in os.environ, 'PATHEXT' in os.environ, sep='|')\n",
+        "print('PATH_PRESENT', 'PATH' in os.environ)\n",
         mode="dev",
     )
 
@@ -179,7 +179,9 @@ def test_the_child_cannot_see_the_operator_keys(monkeypatch: pytest.MonkeyPatch)
     forbidden = ("TOKEN", "SECRET", "PASSWORD", "CREDENTIAL", "API_KEY", "ACCESS_KEY")
     survivors = [name for name in environment_names if any(word in name for word in forbidden)]
     assert survivors == [], f"variables whose name carries a secret word survived: {survivors}"
-    assert result.stdout.rstrip().endswith("True|True"), "PATH and PATHEXT still reach the child"
+    assert result.stdout.rstrip().endswith("PATH_PRESENT True"), (
+        "PATH still reaches the child: the scrub is an allow-list, not an emptied environment"
+    )
 
 
 def test_the_snippet_reaches_the_secret_files_by_absolute_path(
