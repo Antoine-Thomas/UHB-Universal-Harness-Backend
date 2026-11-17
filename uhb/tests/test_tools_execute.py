@@ -239,12 +239,22 @@ class _Server:
     def __init__(self, port: int, module) -> None:
         self.port = port
         self._module = module
+        #: `post()` mints the approval an interface obtains after the operator
+        #: clicked, so the tests that are not about approvals keep testing what
+        #: they were written for. The approval tests call ``post_unapproved``.
+        self.approved = True
 
     def serve_mode(self, mode: str) -> None:
         """The mode the next request is served under (Handler.mode is per request)."""
         self._module.Handler.mode = mode
 
     def post(self, path: str, payload: dict) -> tuple[int, dict]:
+        if path == "/tools/execute" and self.approved:
+            payload = {**payload, "approval_id": self.approval()}
+        return self.post_unapproved(path, payload)
+
+    def post_unapproved(self, path: str, payload: dict) -> tuple[int, dict]:
+        """The raw call: no nonce added, whatever the path."""
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
         try:
             conn.request(
@@ -256,6 +266,17 @@ class _Server:
             return response.status, json.loads(response.read().decode())
         finally:
             conn.close()
+
+    def approval(self, tool: str = "execute_code") -> str:
+        """Mint a nonce the way an interface does, after the operator clicked."""
+        status, data = self.post_unapproved("/tools/approvals", {"tool": tool})
+        assert status == 200, data
+        return str(data["approval_id"])
+
+    def execute(self, code: str, **extra) -> tuple[int, dict]:
+        """Approved `POST /tools/execute`, spelled out rather than implied."""
+        body = {"code": code, "approval_id": self.approval(), **extra}
+        return self.post_unapproved("/tools/execute", body)
 
 
 @pytest.fixture()
@@ -455,3 +476,82 @@ def test_a_timeout_is_reported_not_hidden(http_server) -> None:
     assert status == 200
     assert data["ok"] is False
     assert data["timed_out"] is True
+
+
+# --------------------------------------------------------------------------- #
+# P0-4: l'approbation, autorite du serveur
+# --------------------------------------------------------------------------- #
+def test_without_an_approval_nothing_runs(http_server: _Server) -> None:
+    """A client that skips the interface cannot execute, whatever it claims."""
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post_unapproved(
+        "/tools/execute", {"code": "print('not approved')", "approved": True}
+    )
+
+    assert status == 403
+    assert data["error"]["type"] == "forbidden"
+    assert data["error"]["code"] == "approval_required"
+    assert data["error"]["tool"] == "execute_code"
+    assert "tools/approvals" in data["error"]["message"], "the refusal says what to do"
+
+
+def test_an_approval_authorises_one_run(http_server: _Server) -> None:
+    http_server.serve_mode("dev")
+    nonce = http_server.approval()
+
+    first = http_server.post_unapproved(
+        "/tools/execute", {"code": "print('one')", "approval_id": nonce}
+    )
+    second = http_server.post_unapproved(
+        "/tools/execute", {"code": "print('two')", "approval_id": nonce}
+    )
+
+    assert first[0] == 200
+    assert first[1]["stdout"].strip() == "one"
+    assert second[0] == 403, "a nonce is consumed by the run it authorised"
+    assert second[1]["error"]["code"] == "approval_required"
+
+
+def test_an_expired_approval_is_refused(http_server: _Server) -> None:
+    """Expiry is enforced by UHB, not by the client forgetting to retry."""
+    http_server.serve_mode("dev")
+    stale = http_server.approval()
+    http_server._module._APPROVALS[stale] = (time.monotonic() - 1.0, "execute_code")
+
+    status, data = http_server.post_unapproved(
+        "/tools/execute", {"code": "print('late')", "approval_id": stale}
+    )
+
+    assert status == 403
+    assert data["error"]["code"] == "approval_required"
+
+
+def test_an_unknown_approval_is_refused(http_server: _Server) -> None:
+    http_server.serve_mode("dev")
+
+    status, data = http_server.post_unapproved(
+        "/tools/execute", {"code": "print('guess')", "approval_id": "not-a-real-nonce"}
+    )
+
+    assert status == 403
+    assert data["error"]["code"] == "approval_required"
+
+
+def test_the_approval_route_only_mints_for_execute_code(http_server: _Server) -> None:
+    status, _data = http_server.post_unapproved("/tools/approvals", {"tool": "desktop_snapshot"})
+
+    assert status == 400
+
+
+def test_an_approval_refusal_is_journaled_without_the_code(http_server, capsys) -> None:
+    http_server.serve_mode("dev")
+
+    http_server.post_unapproved(
+        "/tools/execute", {"code": "print('should-not-be-logged')"}
+    )
+
+    journal = capsys.readouterr().out
+    assert "[uhb] tools/execute refused (403)" in journal
+    assert "approval" in journal
+    assert "should-not-be-logged" not in journal, "the snippet never reaches the journal"
