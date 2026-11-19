@@ -29,9 +29,7 @@ PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
-WRITE_PNG = "open('chart.png', 'wb').write(base64.b64decode(%r))" % (
-    base64.b64encode(PNG_1X1).decode()
-)
+WRITE_PNG = f"open('chart.png', 'wb').write(base64.b64decode({base64.b64encode(PNG_1X1).decode()!r}))"
 
 
 @pytest.fixture(autouse=True)
@@ -184,29 +182,31 @@ def test_the_child_cannot_see_the_operator_keys(monkeypatch: pytest.MonkeyPatch)
     )
 
 
-def test_the_snippet_reaches_the_secret_files_by_absolute_path(
+def test_the_snippet_cannot_read_the_secret_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """CHARACTERISATION: the environment is scrubbed, the filesystem is not.
+    """INVERTED on 19/11 — it used to assert the opposite, and that was the point.
 
-    This test asserts what the tool *does today*, so the guarantee cannot be
-    overstated in a report: the child runs as the operator's user, therefore every
-    file that user can open, it can open. A disposable ``UH_HOME`` and ``HOME`` hold
-    decoys — never the real ones — and the snippet prints them by absolute path.
-
-    When containment changes (restricted token, container, per-run secrets), this
-    test must be INVERTED, not deleted: the leak is the thing being measured.
+    Point 0 measured, through the real interface, that a snippet read the
+    operator's ``keys.toml``, ``mcp-secrets.toml``, the UHB ``.env`` and every
+    ``cmdkey`` target. The audit hook installed by ``_uhb_runner.py`` now refuses
+    those reads, so this test asserts the refusal with real files named by
+    absolute path. A disposable ``UH_HOME`` and ``HOME`` hold the decoys — never
+    the operator's own.
     """
     uh_home = tmp_path / "uh-home"
     home = tmp_path / "home"
+    checkout = tmp_path / "checkout"
     (home / ".uhb").mkdir(parents=True)
+    checkout.mkdir()
     uh_home.mkdir()
 
     decoys = {
-        uh_home / "keys.toml": 'deepseek = "sk-decoy-KEYS-TOML"\n',
+        uh_home / "keys.toml": 'deepseek = "«redacted:sk-…»"\n',
+        uh_home / "mcp-secrets.toml": "token = 'mcp-secret-decoy'\n",
         uh_home / "web-token": "WEB-TOKEN-DECOY\n",
-        uh_home / "router-token": "ROUTER-TOKEN-DECOY\n",
         home / ".uhb" / "shutdown-token": "SHUTDOWN-TOKEN-DECOY\n",
+        checkout / ".env": "DEEPSEEK_API_KEY=env-secret-decoy\n",
     }
     for path, content in decoys.items():
         path.write_text(content, encoding="utf-8", newline="\n")
@@ -221,17 +221,149 @@ def test_the_snippet_reaches_the_secret_files_by_absolute_path(
         "for raw in targets:\n"
         "    path = Path(raw)\n"
         "    try:\n"
-        "        print(path.name, '=', path.read_text(encoding='utf-8').strip())\n"
+        "        print(path.name, 'READ', path.read_text(encoding='utf-8').strip())\n"
+        "    except PermissionError:\n"
+        "        print(path.name, 'REFUSED')\n"
         "    except OSError as exc:\n"
         "        print(path.name, 'UNREADABLE', exc.__class__.__name__)\n"
     )
     result = execute_code(code, mode="dev")
 
     assert result.ok, result.stderr
-    assert "UNREADABLE" not in result.stdout, "the files exist; a read must succeed"
-    for marker in ("sk-decoy-KEYS-TOML", "WEB-TOKEN-DECOY", "ROUTER-TOKEN-DECOY",
-                   "SHUTDOWN-TOKEN-DECOY"):
-        assert marker in result.stdout, f"{marker} is NOT protected by the sandbox"
+    for marker in ("«redacted:sk-…»", "mcp-secret-decoy", "WEB-TOKEN-DECOY",
+                   "SHUTDOWN-TOKEN-DECOY", "env-secret-decoy"):
+        assert marker not in result.stdout, f"{marker} reached the transcript"
+    assert result.stdout.count("REFUSED") == len(decoys), result.stdout
+
+
+def test_a_write_outside_the_run_directory_is_refused(tmp_path: Path) -> None:
+    """The confinement the badge is allowed to describe: writes stay in the run."""
+    outside = tmp_path / "escaped.txt"
+    result = execute_code(
+        "from pathlib import Path\n"
+        f"target = Path({str(outside)!r})\n"
+        "try:\n"
+        "    target.write_text('escaped', encoding='utf-8')\n"
+        "    print('WROTE')\n"
+        "except PermissionError:\n"
+        "    print('REFUSED')\n"
+        "print('STILL_THERE', target.exists())\n",
+        mode="dev",
+    )
+
+    assert result.ok, result.stderr
+    assert "REFUSED" in result.stdout, result.stdout
+    assert "WROTE" not in result.stdout, result.stdout
+    assert not outside.exists(), "a refused write must not leave a file behind"
+
+
+def test_a_delete_outside_the_run_directory_is_refused(tmp_path: Path) -> None:
+    victim = tmp_path / "not-yours.txt"
+    victim.write_text("keep me\n", encoding="utf-8")
+
+    result = execute_code(
+        "from pathlib import Path\n"
+        f"target = Path({str(victim)!r})\n"
+        "try:\n"
+        "    target.unlink()\n"
+        "    print('DELETED')\n"
+        "except PermissionError:\n"
+        "    print('REFUSED')\n",
+        mode="dev",
+    )
+
+    assert result.ok, result.stderr
+    assert "REFUSED" in result.stdout, result.stdout
+    assert victim.is_file(), "a refused delete must leave the file alone"
+
+
+def test_the_snippet_cannot_start_a_process(tmp_path: Path) -> None:
+    """``subprocess`` was the escape route the model used on 19/11 (425/435)."""
+    result = execute_code(
+        "import subprocess, os, sys\n"
+        "for attempt in ('subprocess', 'os.system'):\n"
+        "    try:\n"
+        "        if attempt == 'subprocess':\n"
+        "            subprocess.run([sys.executable, '-c', 'print(1)'], check=False)\n"
+        "        else:\n"
+        "            os.system('cmd /c echo 1')\n"
+        "        print(attempt, 'RUN')\n"
+        "    except PermissionError:\n"
+        "        print(attempt, 'REFUSED')\n",
+        mode="dev",
+    )
+
+    assert result.ok, result.stderr
+    assert result.stdout.count("REFUSED") == 2, result.stdout
+    assert "RUN" not in result.stdout, result.stdout
+
+
+def test_a_gui_module_cannot_be_imported() -> None:
+    """The contract says "draw a file"; a window is not an artefact."""
+    result = execute_code(
+        "try:\n"
+        "    import turtle\n"
+        "    print('IMPORTED')\n"
+        "except PermissionError:\n"
+        "    print('REFUSED')\n",
+        mode="dev",
+    )
+
+    assert result.ok, result.stderr
+    assert "REFUSED" in result.stdout, result.stdout
+
+
+def test_the_workshop_interpreter_is_preferred(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = tmp_path / "atelier" / "python.exe"
+    fake.parent.mkdir()
+    fake.write_text("not really an interpreter\n", encoding="utf-8")
+    monkeypatch.setenv(tool.ATELIER_ENV, str(fake))
+
+    assert tool.atelier_python() == str(fake)
+    assert tool._python() == str(fake)
+    assert tool.execute_facts()["atelier"] is True
+
+
+def test_without_a_workshop_the_host_interpreter_is_named(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No venv is a normal state: the diagnostic says which python runs, plainly."""
+    monkeypatch.setenv(tool.ATELIER_ENV, str(tmp_path / "absent" / "python.exe"))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("UH_HOME", raising=False)
+
+    facts = tool.execute_facts()
+
+    assert facts["atelier"] is False
+    assert facts["interpreter"] == (tool.sys.executable or "python")
+    assert facts["confinement"]["writes"] == "run directory only"
+
+
+def test_the_result_names_the_interpreter(tmp_path: Path) -> None:
+    result = execute_code("print('ok')", mode="dev")
+
+    assert result.ok
+    assert result.interpreter == tool._python()
+    assert result.to_dict()["interpreter"] == result.interpreter
+
+
+def test_the_server_status_publishes_the_interpreter() -> None:
+    from uhb.entrypoints.panel import status_payload
+
+    payload = status_payload(
+        version="0.0.0",
+        mode="dev",
+        harness="hermes",
+        providers=[],
+        modes=[],
+        execute={"interpreter": "C:/atelier/python.exe", "atelier": True},
+    )
+
+    assert payload["execute"]["interpreter"] == "C:/atelier/python.exe"
+    assert payload["execute"]["atelier"] is True
 
 
 def test_the_child_gets_a_headless_matplotlib_and_a_private_home() -> None:
@@ -292,8 +424,7 @@ def test_svg_counts_as_an_image() -> None:
 def test_an_image_in_a_subdirectory_is_found() -> None:
     result = execute_code(
         "import base64, os\nos.makedirs('figs', exist_ok=True)\n"
-        "open('figs/plot.png', 'wb').write(base64.b64decode(%r))"
-        % base64.b64encode(PNG_1X1).decode(),
+        f"open('figs/plot.png', 'wb').write(base64.b64decode({base64.b64encode(PNG_1X1).decode()!r}))",
         mode="dev",
     )
 

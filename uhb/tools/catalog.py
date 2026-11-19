@@ -65,9 +65,15 @@ class ToolSpec:
 EXECUTE_CODE = ToolSpec(
     name=TOOL_NAME,
     description=(
-        "Execute Python code in the authorized workspace and return its stdout, "
-        "stderr, exit code and any image the code produced. Use it to compute, "
-        "to read data or to draw a chart instead of handing the code to the user."
+        "Run Python code in the workshop and return its stdout, stderr, exit code "
+        "and any image it produced. Use it to compute, to read data or to draw a "
+        "chart instead of handing the code to the user. The workshop carries numpy "
+        "and matplotlib, and only those: draw with matplotlib and call "
+        "pyplot.savefig('name.png') so the image is returned - never turtle, never "
+        "tkinter, never a GUI window. The working directory is the run directory, "
+        "and it is the only place you may write: a write, a delete or a rename "
+        "anywhere else is refused, as are reading the harness's credential files "
+        "and starting another process (subprocess, os.system)."
     ),
     parameters={
         "type": "object",
