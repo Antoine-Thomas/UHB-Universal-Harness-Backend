@@ -67,7 +67,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..hub.modes import ModeRequired, ModeSpec, ModeViolation, get_mode
+from ..hub.modes import ModeRequired, ModeSpec, get_mode
 
 #: Name a mode must list in ``tools`` for this module to run at all.
 TOOL_NAME = "execute_code"
@@ -452,7 +452,7 @@ def _protected_dirs() -> tuple[str, ...]:
 
 
 def _runner_source(timeout: float, atelier: str | None = None) -> str:
-    cpu = max(1, int(math.ceil(timeout)) + 1)
+    cpu = max(1, math.ceil(timeout) + 1)
     return (
         _RUNNER.replace("__CPU__", str(cpu))
         .replace("__AS__", str(2 * 1024**3))

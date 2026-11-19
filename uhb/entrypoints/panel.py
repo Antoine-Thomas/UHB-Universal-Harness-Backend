@@ -233,7 +233,7 @@ WIDGET_JS = """<script>
     shutdownNote("Arrêt en cours…", false);
     // `data-uhb-stop` scopes what the button stops: "self", "docker", "local" or a
     // comma-separated list. Absent, the server's default applies (all three).
-    var scoped = (badge.dataset.uhbStop || "").replace(/\s+/g, "");
+    var scoped = (badge.dataset.uhbStop || "").replace(/\\s+/g, "");
     var body = { confirm: true };
     if (scoped) { body.stop = scoped.split(",").filter(Boolean); }
     fetch(base + "/shutdown", {

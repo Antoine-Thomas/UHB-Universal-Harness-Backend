@@ -29,9 +29,7 @@ PNG_1X1 = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 
-WRITE_PNG = "open('chart.png', 'wb').write(base64.b64decode(%r))" % (
-    base64.b64encode(PNG_1X1).decode()
-)
+WRITE_PNG = f"open('chart.png', 'wb').write(base64.b64decode({base64.b64encode(PNG_1X1).decode()!r}))"
 
 
 @pytest.fixture(autouse=True)
@@ -426,8 +424,7 @@ def test_svg_counts_as_an_image() -> None:
 def test_an_image_in_a_subdirectory_is_found() -> None:
     result = execute_code(
         "import base64, os\nos.makedirs('figs', exist_ok=True)\n"
-        "open('figs/plot.png', 'wb').write(base64.b64decode(%r))"
-        % base64.b64encode(PNG_1X1).decode(),
+        f"open('figs/plot.png', 'wb').write(base64.b64decode({base64.b64encode(PNG_1X1).decode()!r}))",
         mode="dev",
     )
 
