@@ -429,12 +429,15 @@ def status_payload(
     harness: str,
     providers: list[dict[str, Any]],
     modes: list[str],
+    execute: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """``GET /status``: what the widget and any other control plane needs.
 
     ``connected`` means this server answered — the response itself is the proof.
     Whether a model can actually be called is a separate fact, carried by
-    ``providers[].key_loaded`` and ``providers[].local``.
+    ``providers[].key_loaded`` and ``providers[].local``. ``execute`` says which
+    interpreter serves ``execute_code`` and what the confinement refuses, because
+    "matplotlib is missing" cost a whole session when nothing published it.
     """
     return {
         "connected": True,
@@ -443,6 +446,7 @@ def status_payload(
         "harness": harness,
         "providers": providers,
         "modes": modes,
+        "execute": execute or {},
         "docs": {"manual": "/docs/manuel.pdf", "manual_en": "/docs/manual.pdf",
                  "status": "/status", "panel": "/"},
         "endpoints": {

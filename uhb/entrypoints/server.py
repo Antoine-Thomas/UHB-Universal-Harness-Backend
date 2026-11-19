@@ -57,7 +57,7 @@ from ..hub.router import (
 )
 from ..tools import catalog, desktop
 from ..tools.execute import DEFAULT_TIMEOUT as TOOL_DEFAULT_TIMEOUT
-from ..tools.execute import CodeExecutionError, execute_code
+from ..tools.execute import CodeExecutionError, execute_code, execute_facts
 from . import memory_routes
 from . import shutdown as shutdown_routes
 from .panel import manual_path, status_payload
@@ -264,6 +264,7 @@ class Handler(BaseHTTPRequestHandler):
                 harness=getattr(self.adapter, "name", type(self.adapter).__name__),
                 providers=providers_facts(Router.from_config()),
                 modes=sorted(load_modes()),
+                execute=execute_facts(),
             ))
             return
         if path == "/rag/status":

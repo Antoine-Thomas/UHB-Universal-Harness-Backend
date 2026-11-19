@@ -15,8 +15,20 @@ What is guaranteed
   ``SYSTEMROOT``, the temp directories) plus the run directory as ``HOME``.
   Every API key present in the operator's shell is dropped **from the environment**,
   so a snippet cannot read ``DEEPSEEK_API_KEY`` and print it into a transcript.
-  This says nothing about the filesystem: see below, and
-  ``test_the_snippet_reaches_the_secret_files_by_absolute_path``.
+* **The child is confined by an audit hook** (``sys.addaudithook``, installed in
+  the runner before ``code.py`` is imported, so it cannot be removed): a write,
+  a delete or a rename **outside the run directory** is refused; reading ``~/.uh``,
+  ``~/.uhb`` (any other run included) or any ``.env`` is refused; ``subprocess.*``,
+  ``os.system``, ``os.exec*``, ``os.spawn*`` and ``os.startfile`` are refused;
+  ``turtle``/``tkinter`` cannot be imported. The refusals are ``PermissionError``
+  raised inside the snippet, so the run reports them instead of dying silently.
+  ``ctypes`` is deliberately **not** blocked: numpy and matplotlib load ``kernel32``
+  through it at import time.
+* **A dedicated workshop interpreter, when it exists.** ``$UHB_ATELIER_PYTHON``, or
+  ``~/.uhb/atelier/Scripts/python.exe`` (Windows) / ``~/.uhb/atelier/bin/python``:
+  a virtualenv carrying ``numpy`` and ``matplotlib`` and nothing else, so a chart
+  does not depend on — and cannot reach — a system installation. The interpreter
+  used is reported in every result and in ``GET /status``.
 * **Output is capped, never silently.** A truncated stream says how much was
   dropped, and the result's ``notes`` say why each image was left out.
 * **A timeout kills the process tree**, not just the parent.
@@ -24,22 +36,21 @@ What is guaranteed
   rewrites inside its run directory is reported with its path, MIME type, size,
   and optionally a ``data:`` URL a UI can put straight into ``<img src>``.
 
-What is NOT guaranteed — read this before exposing the tool
------------------------------------------------------------
-This is containment, not a security boundary. The snippet runs as the operator's
-user with the operator's filesystem, on purpose: the ordinary use is "plot my
-data" or "check this regex". It is not a sandbox for hostile code, it does not
-seal the network, and on Windows the resource limits below do not exist at all —
-only the timeout does. Do not publish the HTTP route beyond loopback.
+What is NOT guaranteed — read this before writing a stronger sentence
+---------------------------------------------------------------------
+The audit hook is a Python-level boundary, not a kernel one. Three things are
+outside it, and they must be named whenever the confinement is described:
 
-Concretely, and measured by a test rather than assumed: the environment is
-scrubbed, the **files are not**. A snippet that names an absolute path can read
-``$UH_HOME/keys.toml``, ``$UH_HOME/web-token``, ``$UH_HOME/router-token`` and
-``~/.uhb/shutdown-token`` exactly as the operator can. Any claim about this tool
-must say "variables d'environnement non héritées", never "the token is not
-visible". The compensating controls are the mode gate (a mode must list
-``execute_code``), the operator's explicit opt-in (``UH_UHB_EXECUTE=1``), and an
-approval in the interface — not file permissions.
+* a snippet that loads the Win32 API itself (``ctypes.WinDLL('kernel32')`` and a
+  hand-written ``CreateFileW``) performs I/O the hook never sees — ``ctypes`` is
+  not blocked because numpy and matplotlib need ``kernel32`` at import time;
+* a C extension that writes without raising an audit event is equally invisible;
+* a snippet can still READ any non-secret file the operator can read (libraries,
+  their data, fonts — refusing those would break numpy and matplotlib themselves).
+
+So the accurate claim is "the Python file API stays in the run directory, the
+known secrets are refused, subprocesses are refused" — never "sandboxed", never
+"no filesystem", and never "a hostile snippet cannot escape".
 """
 
 from __future__ import annotations
@@ -77,6 +88,26 @@ MAX_IMAGES = 8
 
 #: Where run directories go: ``$UHB_RUNS_DIR`` or ``~/.uhb/runs``.
 RUNS_ENV = "UHB_RUNS_DIR"
+
+#: The dedicated workshop interpreter: ``$UHB_ATELIER_PYTHON`` wins, then the two
+#: usual layouts of a virtualenv created next to the run store.
+ATELIER_ENV = "UHB_ATELIER_PYTHON"
+
+#: Names that are never readable from a snippet, wherever they live. ``.env`` and
+#: ``.env.*`` are matched on the prefix by the runner, not listed here.
+SECRET_NAMES: tuple[str, ...] = (
+    "keys.toml",
+    "mcp-secrets.toml",
+    "web-token",
+    "router-token",
+    "shutdown-token",
+    "credentials",
+    "credentials.json",
+)
+
+#: Modules the workshop refuses to import: they draw in a GUI window instead of
+#: producing a file, which is what the tool promises.
+BLOCKED_MODULES: tuple[str, ...] = ("turtle", "tkinter", "_tkinter")
 
 #: Extensions that mean "this is something a UI can display".
 IMAGE_MIME: dict[str, str] = {
@@ -151,6 +182,8 @@ class ExecutionResult:
     notes: tuple[str, ...] = ()
     timeout_s: float = DEFAULT_TIMEOUT
     mode: str = ""
+    #: The interpreter that ran the snippet: the workshop venv when one is installed.
+    interpreter: str = ""
     command: tuple[str, ...] = field(default=())
 
     @property
@@ -167,6 +200,7 @@ class ExecutionResult:
             "duration_s": self.duration_s,
             "timeout_s": self.timeout_s,
             "mode": self.mode,
+            "interpreter": self.interpreter,
             "run_dir": str(self.run_dir),
             "command": list(self.command),
             "images": [image.to_dict() for image in self.images],
@@ -254,7 +288,14 @@ def _child_env(run_dir: Path) -> dict[str, str]:
 #: The limits live in the child on purpose — ``preexec_fn`` is unsafe in a
 #: threaded server (this one is: ``ThreadingHTTPServer``).
 _RUNNER = '''\
-"""UHB run harness — sets resource limits, then executes code.py."""
+"""UHB run harness - confines the snippet, then executes code.py.
+
+The audit hook is installed BEFORE code.py is read, and Python offers no way to
+uninstall one, so the snippet cannot lift it. It refuses a write outside this
+directory, a read of the known credential files, and every route out to another
+process (subprocess, os.system, os.exec*). It is a Python-level boundary,
+not a kernel one: see the module docstring in uhb/tools/execute.py.
+"""
 import os
 import sys
 
@@ -262,7 +303,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 os.chdir(ROOT)
 os.makedirs(os.path.join(ROOT, ".mpl"), exist_ok=True)
 
-try:  # POSIX only: on Windows the module does not exist, and timeout is all we have
+try:  # POSIX only: on Windows the timeout is all we have
     import resource
 except ImportError:
     resource = None
@@ -278,26 +319,199 @@ if resource is not None:
         except (ValueError, OSError):
             pass
 
+# --- confinement ---------------------------------------------------------- #
+ROOT_ABS = os.path.normcase(os.path.realpath(ROOT))
+PROTECTED = tuple(
+    os.path.normcase(os.path.realpath(item)) for item in __PROTECTED__
+)
+#: The workshop venv lives under ~/.uhb on purpose (one place to uninstall), so its
+#: own libraries must stay importable: reads there are not "a secret".
+ATELIER_ROOT = ""
+if __ATELIER__:
+    ATELIER_ROOT = os.path.dirname(
+        os.path.dirname(os.path.normcase(os.path.realpath(__ATELIER__)))
+    )
+SECRET_NAMES = __SECRET_NAMES__
+BLOCKED_MODULES = __BLOCKED_MODULES__
+
+WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
+#: No ``ctypes.*`` here on purpose: numpy and matplotlib both load ``kernel32``
+#: through ctypes at import time, so a blanket ban breaks the workshop itself.
+#: A snippet that loads the Win32 API by hand can therefore still act; that is the
+#: documented limit of a Python-level hook, not an oversight.
+DENY_EVENTS = (
+    "subprocess.Popen", "os.system", "os.exec", "os.posix_spawn", "os.spawn",
+    "os.startfile", "pty.spawn", "os.fork", "os.forkpty",
+)
+PATH_EVENTS = ("os.remove", "os.rename", "os.rmdir", "os.mkdir", "os.link",
+               "os.symlink", "os.truncate", "os.chmod", "os.utime")
+
+
+def _norm(value):
+    """(path) -> an absolute, case-folded real path, or None if it is not one."""
+    try:
+        raw = os.fspath(value)
+    except TypeError:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", "replace")
+    try:
+        return os.path.normcase(os.path.realpath(raw))
+    except (OSError, ValueError):
+        return None
+
+
+def _in_root(norm):
+    return norm == ROOT_ABS or norm.startswith(ROOT_ABS + os.sep)
+
+
+def _is_secret(norm):
+    if ATELIER_ROOT and (norm == ATELIER_ROOT or norm.startswith(ATELIER_ROOT + os.sep)):
+        return False
+    name = os.path.basename(norm)
+    if name in SECRET_NAMES or name.startswith(".env"):
+        return True
+    for base in PROTECTED:
+        if norm == base or norm.startswith(base + os.sep):
+            return True
+    return False
+
+
+def _writes(mode, flags):
+    if isinstance(flags, int) and flags & WRITE_FLAGS:
+        return True
+    return isinstance(mode, str) and any(ch in mode for ch in "wax+")
+
+
+def _refuse(what, path=None):
+    detail = " (%s)" % path if path else ""
+    raise PermissionError(
+        "confinement atelier: " + what + detail
+        + " - le code s'execute dans le dossier du run uniquement ; les fichiers "
+          "d'identifiants et les autres processus sont hors de portee"
+    )
+
+
+def _audit(event, args):
+    if event in DENY_EVENTS:
+        _refuse(event)
+        return
+    if event == "import":
+        module = str(args[0]) if args else ""
+        if module.split(".")[0] in BLOCKED_MODULES:
+            _refuse("import " + module)
+        return
+    if event == "open":
+        path, mode, flags = args
+        norm = _norm(path)
+        if norm is None:
+            return
+        if _writes(mode, flags):
+            if not _in_root(norm):
+                _refuse("ecriture hors du dossier du run", norm)
+            return
+        if not _in_root(norm) and _is_secret(norm):
+            _refuse("lecture d'un fichier protege", norm)
+        return
+    if event in PATH_EVENTS:
+        for candidate in args[:2]:
+            norm = _norm(candidate)
+            if norm is not None and not _in_root(norm):
+                _refuse(event, norm)
+
+
+sys.addaudithook(_audit)
+
 import runpy
 
 runpy.run_path(os.path.join(ROOT, "code.py"), run_name="__main__")
 '''
 
 
-def _runner_source(timeout: float) -> str:
+def _protected_dirs() -> tuple[str, ...]:
+    """The directories a snippet must not read: the harness's own homes.
+
+    ``~/.uh`` holds the keys, the web token and the sessions database; ``~/.uhb``
+    holds the shutdown token and every other run. The current run lives inside
+    ``~/.uhb`` and is allowed by :func:`_in_root`, which wins over this list.
+    """
+    home = Path(os.path.expanduser("~"))
+    bases = [home / ".uh", home / ".uhb"]
+    configured = os.environ.get("UH_HOME", "").strip()
+    if configured:
+        bases.append(Path(configured).expanduser())
+    found: list[str] = []
+    for base in bases:
+        try:
+            text = str(base.resolve())
+        except OSError:  # a path that cannot be resolved is still worth denying
+            text = str(base)
+        if text not in found:
+            found.append(text)
+    return tuple(found)
+
+
+def _runner_source(timeout: float, atelier: str | None = None) -> str:
     cpu = max(1, int(math.ceil(timeout)) + 1)
     return (
         _RUNNER.replace("__CPU__", str(cpu))
         .replace("__AS__", str(2 * 1024**3))
         .replace("__FSIZE__", str(64 * 1024**2))
         .replace("__NOFILE__", "256")
+        .replace("__PROTECTED__", repr(_protected_dirs()))
+        .replace("__ATELIER__", repr(atelier or ""))
+        .replace("__SECRET_NAMES__", repr(SECRET_NAMES))
+        .replace("__BLOCKED_MODULES__", repr(BLOCKED_MODULES))
     )
 
 
+def atelier_python() -> str | None:
+    """The dedicated workshop interpreter, when one is installed.
+
+    ``$UHB_ATELIER_PYTHON`` wins; otherwise the two layouts of the virtualenv the
+    installer creates next to the run store. Returning ``None`` means "there is
+    none" — the caller falls back to ``sys.executable`` and says so.
+    """
+    configured = os.environ.get(ATELIER_ENV, "").strip()
+    candidates: list[Path] = [Path(configured).expanduser()] if configured else []
+    home = Path(os.path.expanduser("~"))
+    candidates.append(home / ".uhb" / "atelier" / "Scripts" / "python.exe")
+    candidates.append(home / ".uhb" / "atelier" / "bin" / "python")
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def _python() -> str:
-    # sys.executable is the interpreter that imported uhb: no PATH lookup, so a
-    # different python on PATH cannot silently run the snippet.
-    return sys.executable or "python"
+    # The workshop venv first: an interpreter that carries numpy and matplotlib
+    # and nothing else, so a chart is drawn the same way everywhere. The fallback
+    # is `sys.executable` - the interpreter that imported uhb, never a PATH lookup,
+    # so a different python on PATH cannot silently run the snippet.
+    return atelier_python() or sys.executable or "python"
+
+
+def execute_facts() -> dict[str, Any]:
+    """What runs the code and what confines it, for ``GET /status``.
+
+    Stated as facts, not as a promise: the diagnostic has to say which interpreter
+    will serve the next snippet, because "matplotlib is missing" cost a whole
+    session when nothing published that answer.
+    """
+    atelier = atelier_python()
+    return {
+        "interpreter": atelier or (sys.executable or "python"),
+        "atelier": atelier is not None,
+        "confinement": {
+            "writes": "run directory only",
+            "reads": "refused: ~/.uh, ~/.uhb outside the run, *.env, keys.toml",
+            "processes": "refused: subprocess, os.system, os.exec*, os.spawn*",
+            "gui": "refused: turtle, tkinter",
+        },
+    }
 
 
 # --- discovery -------------------------------------------------------------
@@ -459,9 +673,12 @@ def execute_code(
     notes: list[str] = []
 
     (run_dir / "code.py").write_text(code, encoding="utf-8", newline="\n")
-    (run_dir / "_uhb_runner.py").write_text(_runner_source(timeout), encoding="utf-8", newline="\n")
+    python = _python()
+    (run_dir / "_uhb_runner.py").write_text(
+        _runner_source(timeout, atelier_python()), encoding="utf-8", newline="\n"
+    )
 
-    command = (_python(), "-I", "-B", "-X", "utf8", str(run_dir / "_uhb_runner.py"))
+    command = (python, "-I", "-B", "-X", "utf8", str(run_dir / "_uhb_runner.py"))
     started = time.monotonic()
     timed_out = False
     stdout = stderr = ""
@@ -481,7 +698,7 @@ def execute_code(
             ),
         )
     except OSError as exc:
-        raise CodeExecutionError(f"cannot start the interpreter ({_python()}): {exc}") from exc
+        raise CodeExecutionError(f"cannot start the interpreter ({python}): {exc}") from exc
 
     try:
         out_bytes, err_bytes = process.communicate(timeout=timeout)
@@ -510,22 +727,27 @@ def execute_code(
         notes=tuple(notes),
         timeout_s=timeout,
         mode=spec.name,
+        interpreter=python,
         command=command,
     )
 
 
 __all__ = [
-    "CodeExecutionError",
+    "ATELIER_ENV",
     "DEFAULT_TIMEOUT",
-    "ExecutionResult",
     "IMAGE_MIME",
-    "ImageArtifact",
     "MAX_CODE_CHARS",
     "MAX_INLINE_BYTES",
     "MAX_OUTPUT",
     "MAX_TIMEOUT",
     "RUNS_ENV",
+    "SECRET_NAMES",
     "TOOL_NAME",
+    "CodeExecutionError",
+    "ExecutionResult",
+    "ImageArtifact",
+    "atelier_python",
     "execute_code",
+    "execute_facts",
     "runs_root",
 ]
