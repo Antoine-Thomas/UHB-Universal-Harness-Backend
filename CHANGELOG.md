@@ -9,6 +9,35 @@ After 1.0.0, a removed or renamed route is a major version.
 Versions are read from `uhb/__init__.py` by `pyproject.toml`
 (`dynamic = ["version"]`), so a release is one edit, one tag, one GitHub release.
 
+## [0.3.0] — 2026-11-19
+
+**The workshop runs the code, and the hook keeps it in its run.** `execute_code` no longer
+executes inside the backend process: it launches the interpreter of `~/.uhb/atelier`
+(Python 3.11.9, numpy 2.4.6, matplotlib 3.11.2 installed there), and an audit hook installed
+before the snippet refuses what the confinement forbids.
+
+### Added
+
+- **A confined interpreter.** A run happens in a child process, in the run's own folder,
+  with a `sys.addaudithook` installed first: the desktop, `~/.uh/*` (keys, config, tokens),
+  the backend's `.env`, `subprocess`, `turtle` and `tkinter` are refused, and the refusal is
+  a readable message rather than a traceback the model has to guess at.
+- **The measured effect, not the claimed one.** The returned record carries what the run
+  actually wrote (files, sizes, duration), so a turn can say what it produced.
+- **`uhb_modes` / mode gate.** The backend knows which mode a session runs in and refuses an
+  execution the mode does not allow, instead of relying on the caller's good faith.
+
+### Changed
+
+- `execute_code` routes every snippet through the atelier interpreter when it is installed;
+  the in-process fallback stays for machines without it, and says so.
+
+### Fixed
+
+- Five lint findings in the files this release touched: an unused `ModeViolation` import, a
+  redundant `int()` around `math.ceil`, an invalid escape sequence, and two percent-formatted
+  test fixtures (now f-strings with `!r`, byte-identical output).
+
 ## [0.2.0] — 2026-11-17
 
 **The backend can be driven, and it can refuse.** This release gathers everything on `main`
