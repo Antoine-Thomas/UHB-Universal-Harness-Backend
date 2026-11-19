@@ -225,6 +225,39 @@ Recognised variables:
 
 ---
 
+## 7 bis. Run lifecycle: keep, compress, or let it go
+
+`execute_code` writes each snippet into its own directory (`~/.uhb/runs/run-…`), because
+the images it produced must still be readable when the call returns. That directory has no
+reason to outlive the turn. The policy lives in `uhb.runs`, never in the interface:
+
+| Gesture | What happens |
+|---|---|
+| nothing asked | the run is deleted when the turn closes (`uhb runs close <run>`) |
+| `keep` asked | the run is compressed (deterministic `tar.gz`), given a manifest with its SHA-256, and committed into a bare repository (`~/.uhb/brain-runs.git` by default) |
+| safety net | `uhb runs prune` removes runs older than `runs.ttl_days` and whatever exceeds `runs.max_dirs` / `runs.max_bytes`, oldest first - **never** a kept run |
+
+```
+uhb runs status                 # count, weight, policy, kept runs
+uhb runs list                   # one line per run: age, size, keep flag, mode
+uhb runs close run-… --keep     # archive it (otherwise: delete it)
+uhb runs prune                  # dry run; --apply deletes
+uhb runs restore <sha|commit>   # give a kept run back, digest verified
+uhb runs history                # what the Cerveaux repository contains
+```
+
+A kept run is restorable byte for byte: the manifest carries the bundle's SHA-256, and
+`restore` refuses if it does not match. The repository is local and needs no service -
+SiYuan, the RAG and MARI can all be down and an archive still lands. Its `index.jsonl`
+names every kept run (session, mode, size, summary) so `uhb brain` and the wiki can index
+them without unpacking anything.
+
+HTTP equivalents: `GET /runs` (what exists, what it weighs, the policy in force) and
+`POST /runs` with `{"action": "close"|"prune"|"restore"|"history", …}`. `prune` is a dry
+run unless the body says `"apply": true`.
+
+---
+
 ## 8. The second brain (Hermes Home Vision)
 
 UHB reads the local infrastructure when it is there. Three services, four calls,

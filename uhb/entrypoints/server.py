@@ -70,7 +70,7 @@ DEFAULT_PORT = 8101
 #: POST routes. They share the visitor checks (Origin, Content-Type) and
 #: nothing else: `/route` plans a turn, it does not run one.
 POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex",
-               "/tools/execute", "/tools/approvals", "/shutdown")
+               "/tools/execute", "/tools/approvals", "/runs", "/shutdown")
 
 #: How long an approval stays usable, and why a nonce rather than a boolean: a body
 #: carrying `approved: true` proves nothing, since any client can send it. UHB issues
@@ -267,6 +267,16 @@ class Handler(BaseHTTPRequestHandler):
                 execute=execute_facts(),
             ))
             return
+        if path == "/runs":
+            # The lifecycle of `~/.uhb/runs`: what exists, what weighs what, and the
+            # policy in force. Reads only - closing and pruning are POSTs.
+            from .. import runs as lifecycle
+
+            try:
+                self._json(200, lifecycle.status())
+            except lifecycle.RunsError as exc:
+                self._json(409, {"error": {"message": str(exc), "type": "runs_error"}})
+            return
         if path == "/rag/status":
             # What is on disk, and whether the separate RAG service is up. No
             # index is ever built here: it is compiled from the operator's notes.
@@ -358,6 +368,8 @@ class Handler(BaseHTTPRequestHandler):
             self._tools_execute(payload)
         elif path == "/tools/approvals":
             self._tools_approvals(payload)
+        elif path == "/runs":
+            self._runs(payload)
         elif path.startswith("/tools/"):
             self._tools_call(path.split("/", 2)[2], payload)
         elif path == "/shutdown":
@@ -599,6 +611,51 @@ class Handler(BaseHTTPRequestHandler):
                                        "type": "invalid_request_error"}})
             return
         self._json(200, issue_approval(tool))
+
+    def _runs(self, payload: dict[str, Any]) -> None:
+        """Serve ``POST /runs``: close a run, sweep the leftovers, restore a kept one.
+
+        The retention *policy* lives in ``uhb.runs``, not here and certainly not in the
+        interface: UH only sends the gesture (``close`` at the end of a turn) and shows
+        what came back. ``prune`` is a dry run unless the body says ``apply: true`` -
+        a route that deletes directories must not do it by default.
+        """
+        from .. import runs as lifecycle
+
+        action = str(payload.get("action") or "").strip().lower()
+        try:
+            if action == "close":
+                record = lifecycle.close(
+                    str(payload.get("run") or ""),
+                    keep=None if payload.get("keep") is None else bool(payload.get("keep")),
+                    summary=str(payload.get("summary") or ""),
+                )
+                self._json(200, record)
+                return
+            if action == "prune":
+                report = lifecycle.prune(
+                    dry_run=not bool(payload.get("apply")),
+                    older_than=None if payload.get("older_than") is None else float(payload["older_than"]),
+                )
+                self._json(200, report)
+                return
+            if action == "restore":
+                path = lifecycle.restore(str(payload.get("revision") or ""))
+                self._json(200, {"restored": str(path)})
+                return
+            if action == "history":
+                self._json(200, {"runs": lifecycle.history(limit=int(payload.get("limit") or 20))})
+                return
+        except lifecycle.RunsError as exc:
+            # A refusal is not a server error: the request was understood and denied.
+            self._json(409, {"error": {"message": str(exc), "type": "runs_error"}})
+            return
+        except (TypeError, ValueError) as exc:
+            self._json(400, {"error": {"message": f"invalid payload: {exc}",
+                                       "type": "invalid_request_error"}})
+            return
+        self._json(400, {"error": {"message": "action must be close, prune, restore or history",
+                                   "type": "invalid_request_error"}})
 
     def _tools_execute(self, payload: dict[str, Any]) -> None:
         """Serve ``POST /tools/execute``: run a snippet as the server's own mode.

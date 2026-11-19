@@ -67,3 +67,19 @@ routing:
       model: anthropic/claude-sonnet-5
     - match: {locality: local}
       model: ollama/qwen3:8b
+
+# Run lifecycle (P3-16a). `~/.uhb/runs` holds one directory per executed snippet, because
+# the files a run produced must outlive the call: an interface reads them afterwards. It
+# has no reason to live longer than that, so the policy below is what keeps the folder
+# from filling up. `uhb runs prune` is a dry run unless `--apply` is passed.
+runs:
+  # A run nobody asked to keep is deleted when the turn that owns it closes.
+  purge_default: true
+  # Safety net for the runs of a crashed or killed process.
+  ttl_days: 7
+  max_dirs: 200
+  max_bytes: 524288000   # 500 MB
+  # A kept run is compressed (deterministic tar.gz), given a manifest with its
+  # SHA-256, and committed into this bare repository - one commit per kept run, plus
+  # an index.jsonl the second brain can read without unpacking anything.
+  archive_repo: "~/.uhb/brain-runs.git"
