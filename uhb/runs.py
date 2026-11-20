@@ -609,6 +609,9 @@ def _extract_bundle(payload: bytes, destination: Path) -> int:
                 except OSError as exc:
                     # Un disque plein ou un droit refuse n'est PAS une archive illisible :
                     # le message doit dire ce qui s'est passe, pas accuser l'archive.
+                    # Et le fichier partiel ne doit pas rester : un run a moitie restaure
+                    # serait pire qu'un refus.
+                    target.unlink(missing_ok=True)
                     raise RunsError(
                         f"écriture impossible : {target.name} ({exc.strerror or exc})"
                     ) from exc

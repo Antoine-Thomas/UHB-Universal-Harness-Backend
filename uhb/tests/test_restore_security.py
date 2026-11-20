@@ -173,3 +173,25 @@ def test_no_call_to_extractall_survives() -> None:
         "l'extraction doit rester membre par membre"
     )
     assert not any('filter="data"' in line for line in code)
+
+
+def test_a_write_failure_is_not_reported_as_a_broken_archive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Disque plein : le message dit l'écriture, pas l'archive — et rien de partiel ne reste."""
+    destination = tmp_path / "run"
+    payload = bundle([("plot.png", b"x" * 64, "file")])
+
+    def refuse(*args: object, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(runs.shutil, "copyfileobj", refuse)
+
+    with pytest.raises(runs.RunsError) as caught:
+        extract(payload, destination)
+
+    message = str(caught.value)
+    assert "écriture impossible" in message, message
+    assert "plot.png" in message, message
+    assert "archive" not in message.lower(), "l'archive n'est pas en cause ici"
+    assert not (destination / "plot.png").exists(), "aucun fichier partiel ne doit rester"
