@@ -143,7 +143,9 @@ def test_the_index_names_every_kept_run(root: Path, policy: runs.RunsPolicy) -> 
 
     listing = subprocess.run(
         ["git", "--git-dir", str(policy.repo_path), "show", "HEAD:index.jsonl"],
-        capture_output=True, text=True, check=False,
+        # UTF-8 explicite : `text=True` seul decode avec l'encodage local, cp1252 sur un
+        # runner Windows, et le resume accentue revenait corrompu (4 jobs rouges).
+        capture_output=True, text=True, encoding="utf-8", check=False,
     )
     assert listing.returncode == 0
     entry = json.loads(listing.stdout.splitlines()[-1])
@@ -241,3 +243,33 @@ def test_status_reports_what_it_weighs(root: Path, policy: runs.RunsPolicy) -> N
 
     assert data["count"] == 1 and data["bytes"] >= 400
     assert data["policy"]["archive_exists"] is False
+
+
+def test_a_summary_keeps_its_accents_when_read_back(
+    root: Path, policy: runs.RunsPolicy
+) -> None:
+    """Le texte accentué doit revenir intact, quel que soit l'encodage du système.
+
+    Sur un runner Windows en mode hérité, `text=True` seul décodait la sortie de git en
+    cp1252 alors que l'index est écrit en UTF-8 : quatre jobs CI sont tombés sur cette
+    seule comparaison.
+    """
+    folder = _run(root, "run-20260104-000001-ffffff", keep=True)
+    runs.close(folder, keep=True, policy=policy, root=root, summary="un résumé accentué")
+
+    listing = runs._git(policy.repo_path, "show", "HEAD:index.jsonl")
+
+    assert "un résumé accentué" in listing.stdout
+    assert "Ã" not in listing.stdout, "aucun mojibake : la lecture est explicitement UTF-8"
+
+
+def test_every_git_read_declares_its_encoding() -> None:
+    """Garde anti-régression : `text=True` sans `encoding=` décode avec la locale."""
+    source = Path(runs.__file__).read_text(encoding="utf-8")
+    blocks = source.split("subprocess.run(")[1:]
+    for block in blocks:
+        call = block.split(")", 1)[0]
+        if "text=True" in call:
+            assert "encoding=" in call, (
+                "un appel git décode avec la locale : préciser encoding=\"utf-8\"\n" + call[:200]
+            )

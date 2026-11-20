@@ -325,6 +325,11 @@ def _git(repo: Path, *args: str, work_tree: Path | None = None, check: bool = Tr
         ("git", *args),
         capture_output=True,
         text=True,
+        # git rend de l'UTF-8 et index.jsonl est ecrit en UTF-8 (ligne plus bas). Sans ceci,
+        # `text=True` decode avec l'encodage local : cp1252 sur un runner Windows, et tout
+        # resume accentue revient corrompu. Mesure : utf8_mode=1 masque le defaut en local,
+        # la CI tombe sur les quatre versions Windows.
+        encoding="utf-8",
         env=env,
         cwd=str(work_tree or repo),
         check=False,
@@ -344,6 +349,7 @@ def ensure_repo(policy: RunsPolicy | None = None) -> Path:
         ("git", "init", "--bare", "--initial-branch=main", str(repo)),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         check=False,
     )
     if proc.returncode != 0:
