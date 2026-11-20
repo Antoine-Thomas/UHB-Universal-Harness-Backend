@@ -56,6 +56,7 @@ known secrets are refused, subprocesses are refused" — never "sandboxed", neve
 from __future__ import annotations
 
 import base64
+import hashlib
 import math
 import os
 import subprocess
@@ -182,6 +183,11 @@ class ExecutionResult:
     notes: tuple[str, ...] = ()
     timeout_s: float = DEFAULT_TIMEOUT
     mode: str = ""
+    #: Name of the run directory, and whether it was asked to be kept. The directory
+    #: always exists after the call (an interface reads its images); what happens to it
+    #: next is ``uhb.runs``' decision, not this function's.
+    run_id: str = ""
+    keep: bool = False
     #: The interpreter that ran the snippet: the workshop venv when one is installed.
     interpreter: str = ""
     command: tuple[str, ...] = field(default=())
@@ -202,6 +208,8 @@ class ExecutionResult:
             "mode": self.mode,
             "interpreter": self.interpreter,
             "run_dir": str(self.run_dir),
+            "run": self.run_id or self.run_dir.name,
+            "keep": self.keep,
             "command": list(self.command),
             "images": [image.to_dict() for image in self.images],
             "notes": list(self.notes),
@@ -643,13 +651,18 @@ def execute_code(
     workdir: str | Path | None = None,
     include_base64: bool = False,
     max_output: int = MAX_OUTPUT,
+    keep: bool = False,
+    session: str = "",
 ) -> ExecutionResult:
     """Run ``code`` in its own directory and report streams, code and images.
 
     ``mode`` is mandatory and must list ``execute_code`` in its ``tools``: this
     function refuses to run on behalf of an envelope that has no permission to
     do so. ``workdir`` defaults to a fresh ``~/.uhb/runs/run-…`` directory, which
-    is kept: the image paths have to outlive the call for a UI to read them.
+    **is kept until the run is closed**: the image paths have to outlive the call
+    for a UI to read them. ``keep`` records the operator's choice in the run's
+    ``manifest.json``; ``uhb.runs.close`` then either archives it (``keep=True``)
+    or deletes it, and ``uhb.runs.prune`` sweeps what a crashed process left.
     """
     spec = _spec(mode)
 
@@ -673,6 +686,17 @@ def execute_code(
     notes: list[str] = []
 
     (run_dir / "code.py").write_text(code, encoding="utf-8", newline="\n")
+    # Written before the snippet runs: a run killed mid-way is still describable, and a
+    # later sweep can tell a kept run from a leftover.
+    from .. import runs as uhb_runs
+
+    uhb_runs.write_manifest(
+        run_dir,
+        mode=spec.name,
+        keep=bool(keep),
+        session=str(session or ""),
+        code_sha256=hashlib.sha256(code.encode("utf-8")).hexdigest(),
+    )
     python = _python()
     (run_dir / "_uhb_runner.py").write_text(
         _runner_source(timeout, atelier_python()), encoding="utf-8", newline="\n"
@@ -727,6 +751,8 @@ def execute_code(
         notes=tuple(notes),
         timeout_s=timeout,
         mode=spec.name,
+        run_id=run_dir.name,
+        keep=bool(keep),
         interpreter=python,
         command=command,
     )

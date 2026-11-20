@@ -109,6 +109,28 @@ def build_parser() -> argparse.ArgumentParser:
     brain_read.add_argument("page_id")
     brain_read.add_argument("--json", action="store_true")
 
+    runs_cmd = sub.add_parser("runs", help="run lifecycle: list, prune, keep, restore")
+    runs_sub = runs_cmd.add_subparsers(dest="runs_command", required=True)
+    runs_list = runs_sub.add_parser("list", help="runs on disk, with age, size and keep flag")
+    runs_list.add_argument("--json", action="store_true")
+    runs_status = runs_sub.add_parser("status", help="count, weight, policy and kept runs")
+    runs_status.add_argument("--json", action="store_true")
+    runs_prune = runs_sub.add_parser("prune", help="TTL and quota sweep (dry run by default)")
+    runs_prune.add_argument("--apply", action="store_true", help="delete instead of reporting")
+    runs_prune.add_argument("--older-than", type=float, default=None, help="days; default: runs.ttl_days")
+    runs_prune.add_argument("--json", action="store_true")
+    runs_close = runs_sub.add_parser("close", help="close one run: archive if kept, else delete")
+    runs_close.add_argument("run")
+    runs_close.add_argument("--keep", action="store_true", help="archive it into the Cerveaux repo")
+    runs_close.add_argument("--summary", default="")
+    runs_close.add_argument("--json", action="store_true")
+    runs_restore = runs_sub.add_parser("restore", help="bring a kept run back (digest or commit)")
+    runs_restore.add_argument("revision")
+    runs_restore.add_argument("--json", action="store_true")
+    runs_log = runs_sub.add_parser("history", help="what the Cerveaux repository contains")
+    runs_log.add_argument("--limit", type=int, default=20)
+    runs_log.add_argument("--json", action="store_true")
+
     ui = sub.add_parser("ui", help="what to paste into a dashboard, and where the guide is")
     ui.add_argument("--base", default=f"http://{DEFAULT_HOST}:{DEFAULT_PORT}",
                     help="where UHB listens, as the browser will call it")
@@ -283,6 +305,86 @@ def _tools(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return EXIT_OK if result.ok else EXIT_FAIL
+
+
+def _runs(args: argparse.Namespace) -> int:
+    """Run lifecycle from the terminal: what exists, what goes, what comes back.
+
+    ``prune`` is a dry run unless ``--apply``: the command that deletes a thousand
+    directories should not be the one you type first.
+    """
+    from .. import runs as lifecycle
+
+    try:
+        if args.runs_command == "list":
+            rows = [run.to_dict() for run in lifecycle.list_runs()]
+            if args.json:
+                print(json.dumps(rows, indent=2, ensure_ascii=False))
+            else:
+                for row in rows:
+                    flag = "keep" if row["keep"] else "    "
+                    print(f"{row['run']}  {flag}  {row['age_days']:>6.1f} d  {row['bytes']:>9} B  "
+                          f"{row['mode'] or '-'}")
+                print(f"{len(rows)} run(s)")
+            return EXIT_OK
+
+        if args.runs_command == "status":
+            data = lifecycle.status()
+            if args.json:
+                print(json.dumps(data, indent=2, ensure_ascii=False))
+            else:
+                print(f"root    : {data['root']}")
+                print(f"runs    : {data['count']} ({data['bytes']} B)")
+                policy = data["policy"]
+                print(f"policy  : purge_default={policy['purge_default']} "
+                      f"ttl={policy['ttl_days']} d max_dirs={policy['max_dirs']} "
+                      f"max_bytes={policy['max_bytes']}")
+                print(f"archive : {policy['archive_repo']} "
+                      f"({'ok' if policy['archive_exists'] else 'absent'})")
+                for row in data["kept"]:
+                    print(f"  gardé {row['run']} · {row['age_days']} d · {row['bytes']} B")
+            return EXIT_OK
+
+        if args.runs_command == "prune":
+            report = lifecycle.prune(dry_run=not args.apply, older_than=args.older_than)
+            if args.json:
+                print(json.dumps(report, indent=2, ensure_ascii=False))
+            else:
+                mode = "APPLIQUÉ" if args.apply else "simulation (--apply pour supprimer)"
+                print(f"{mode} · {report['runs']} run(s), {report['protected']} protégé(s)")
+                print(f"candidats : {report['candidates']} · {report['freed_bytes']} B récupérables")
+                for name in report["expired"]:
+                    print(f"  expiré   {name}")
+                for name in report["over_quota"]:
+                    print(f"  quota    {name}")
+                if args.apply:
+                    print(f"supprimés : {report.get('removed', 0)}")
+            return EXIT_OK
+
+        if args.runs_command == "close":
+            record = lifecycle.close(args.run, keep=True if args.keep else None, summary=args.summary)
+            print(json.dumps(record, indent=2, ensure_ascii=False) if args.json
+                  else f"{record['action']} · {record.get('run')}"
+                       + (f" · commit {record['commit'][:12]}" if record.get("commit") else ""))
+            return EXIT_OK
+
+        if args.runs_command == "restore":
+            path = lifecycle.restore(args.revision)
+            print(json.dumps({"restored": str(path)}, indent=2) if args.json else str(path))
+            return EXIT_OK
+
+        rows = lifecycle.history(limit=args.limit)
+        if args.json:
+            print(json.dumps(rows, indent=2, ensure_ascii=False))
+        else:
+            for row in rows:
+                print(f"{row['commit'][:12]}  {row['date']}  {row['message']}")
+            if not rows:
+                print("(aucun run gardé)")
+        return EXIT_OK
+    except lifecycle.RunsError as exc:
+        print(f"uhb runs: {exc}", file=sys.stderr)
+        return EXIT_FAIL
 
 
 def _brain(args: argparse.Namespace) -> int:
@@ -551,6 +653,8 @@ def main(argv: list[str] | None = None) -> int:
             return _ui(args)
         if args.command == "brain":
             return _brain(args)
+        if args.command == "runs":
+            return _runs(args)
         if args.command == "docs":
             return _docs(args)
         if args.command == "health":
