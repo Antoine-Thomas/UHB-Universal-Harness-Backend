@@ -27,6 +27,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -528,14 +529,93 @@ def restore(sha: str, *, policy: RunsPolicy | None = None) -> Path:
     if destination.exists():
         raise RunsError(f"{destination.name} existe déjà : restauration refusée (aucun écrasement)")
     destination.mkdir(parents=True)
-    with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tar:
-        for member in tar.getmembers():
-            if member.name.startswith("/") or ".." in member.name.split("/"):
-                raise RunsError(f"entrée refusée dans l'archive : {member.name}")
-        tar.extractall(destination, filter="data")
+    # Aucun `extractall`, sur aucune version : l'extraction est faite membre par membre,
+    # validée ici. `filter="data"` n'existe pas en 3.10 et laissait la CI rouge ; surtout, une
+    # détection de compatibilité aurait produit deux chemins de code dont un seul est testé.
+    _extract_bundle(payload, destination)
     write_manifest(destination, mode=str(entry.get("mode") or ""), keep=True,
                    archived=True, archive_sha=entry.get("sha256"), archive_commit=resolved)
     return destination
+
+
+#: Un nom de membre refusé avant toute écriture : absolu POSIX, lecteur Windows (`C:`),
+#: UNC (`\\serveur\partage`), ou remontée par `..`.
+_DRIVE = re.compile(r"^[A-Za-z]:")
+
+
+def _member_parts(name: str) -> list[str]:
+    """Composants sûrs d'un nom de membre, ou refus. Aucune écriture n'a encore eu lieu."""
+    raw = name.replace("\\", "/")
+    if not raw or raw.startswith(("/", "//")):
+        raise RunsError(f"entrée refusée dans l'archive : {name!r}")
+    if _DRIVE.match(raw):
+        raise RunsError(f"entrée refusée dans l'archive (lecteur) : {name!r}")
+    parts = [part for part in raw.split("/") if part not in ("", ".")]
+    if not parts or any(part == ".." for part in parts):
+        raise RunsError(f"entrée refusée dans l'archive : {name!r}")
+    return parts
+
+
+def _ensure_folder(destination: Path, parts: list[str]) -> None:
+    """Crée les dossiers parents un à un, sans jamais traverser un lien symbolique."""
+    current = destination
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            raise RunsError(f"dossier parent symbolique refusé : {part!r}")
+        if current.exists():
+            if not current.is_dir():
+                raise RunsError(f"un fichier occupe la place du dossier {part!r}")
+            continue
+        current.mkdir()
+
+
+def _extract_bundle(payload: bytes, destination: Path) -> int:
+    """Restaure l'archive dans ``destination``, membre par membre. Rend le nombre de fichiers.
+
+    Règles, identiques sur toutes les versions de Python :
+
+    * seuls les **fichiers réguliers** sont extraits : lien symbolique, lien dur, dossier,
+      périphérique et FIFO sont refusés ;
+    * nom validé (absolu, lecteur, UNC, ``..``) **avant** la moindre écriture ;
+    * les dossiers parents sont créés un à un et un lien symbolique préexistant est refusé —
+      c'est ce qui empêche une sortie par un lien déjà présent dans le dossier ;
+    * aucune métadonnée de l'archive n'est appliquée : ni permissions, ni propriétaire, ni
+      mtime, ni attributs. Les octets sont écrits, rien d'autre ;
+    * une cible déjà présente est refusée : aucune restauration n'écrase un fichier.
+    """
+    try:
+        # Un seul gestionnaire de contexte, et l'erreur d'ouverture traduite en refus lisible :
+        # gzip leve EOFError sur une archive tronquee, tarfile leve ReadError sur autre chose.
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            written = 0
+            for member in archive.getmembers():
+                if not member.isfile():
+                    raise RunsError(
+                        "entrée refusée dans l'archive (pas un fichier régulier) : "
+                        f"{member.name!r}"
+                    )
+                parts = _member_parts(member.name)
+                target = destination.joinpath(*parts)
+                _ensure_folder(destination, parts[:-1])
+                if target.exists() or target.is_symlink():
+                    raise RunsError(f"restauration refusée, {target.name} existe déjà")
+                handle = archive.extractfile(member)
+                if handle is None:
+                    raise RunsError(f"contenu illisible pour {member.name!r}")
+                try:
+                    with handle, open(target, "xb") as out:
+                        shutil.copyfileobj(handle, out)
+                except OSError as exc:
+                    # Un disque plein ou un droit refuse n'est PAS une archive illisible :
+                    # le message doit dire ce qui s'est passe, pas accuser l'archive.
+                    raise RunsError(
+                        f"écriture impossible : {target.name} ({exc.strerror or exc})"
+                    ) from exc
+                written += 1
+            return written
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        raise RunsError(f"archive illisible ou tronquée : {type(exc).__name__}") from exc
 
 
 def _git_binary(repo: Path, spec: str) -> bytes:
