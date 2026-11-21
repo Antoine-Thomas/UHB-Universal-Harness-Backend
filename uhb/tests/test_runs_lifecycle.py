@@ -16,6 +16,7 @@ an interface reads the images after the call returns.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -101,6 +102,10 @@ def test_a_kept_run_is_archived_and_restorable_byte_for_byte(
 ) -> None:
     folder = _run(root, "run-20260102-000000-cccccc", keep=True,
                   files={"plot.png": "PNG-ish bytes", "data/out.csv": "a,b\n1,2\n"})
+    # Ce que le run publie AVANT l'archivage : le bundle doit le rendre tel quel, et le
+    # manifeste restauré doit avoir exactement cette empreinte.
+    avant = (folder / runs.MANIFEST).read_bytes()
+    empreinte = hashlib.sha256(avant).hexdigest()
 
     record = runs.close(folder, keep=True, policy=policy, root=root, summary="a chart")
 
@@ -117,8 +122,97 @@ def test_a_kept_run_is_archived_and_restorable_byte_for_byte(
     assert restored.name == folder.name
     assert (restored / "plot.png").read_text(encoding="utf-8") == "PNG-ish bytes"
     assert (restored / "data" / "out.csv").read_text(encoding="utf-8") == "a,b\n1,2\n"
+
+    # D-2, au sens strict : le manifeste restauré est celui qui a été archivé, octet pour
+    # octet. Ni `created` retouché, ni `session` perdue, ni clés d'archive injectées.
+    apres = (restored / runs.MANIFEST).read_bytes()
+    assert hashlib.sha256(apres).hexdigest() == empreinte, (
+        "le manifeste restauré doit être identique à celui qui a été archivé"
+    )
+    manifest = json.loads(apres)
+    assert manifest["session"] == "s1" and manifest["keep"] is True
+    assert manifest["created"] == json.loads(avant)["created"]
+    assert "archived" not in manifest, "la provenance vit dans le dépôt, pas dans le run"
+
+    # La provenance est bien publiée : l'entrée Git nomme le bundle et son empreinte.
+    entry = subprocess.run(
+        ["git", "--git-dir", str(policy.repo_path), "cat-file", "-p",
+         f"{record['commit']}:runs/run-20260102-000000-cccccc/manifest.json"],
+        capture_output=True, text=True, check=False,
+    )
+    assert entry.returncode == 0, entry.stderr
+    consigne = json.loads(entry.stdout)
+    assert consigne["archived"] is True and consigne["sha256"] == record["sha256"]
+    assert consigne["summary"] == "a chart"
+
+
+def test_rewriting_a_manifest_merges_it_instead_of_replacing_it(root: Path) -> None:
+    """Une seconde écriture ajoute des clés, elle n'efface pas les précédentes.
+
+    L'archivage réécrivait le manifeste : le run perdait `session` et `summary`, et
+    `created` devenait l'heure de cette écriture. C'est ce défaut que la fidélité de D-2
+    a mis au jour ; il se vérifie ici sans archiver.
+    """
+    folder = _run(root, "run-20260105-000000-ffffff", keep=True)
+    runs.write_manifest(folder, summary="un graphe", files=["code.py"])
+    premier = runs.read_manifest(folder)
+    cree = premier["created"]
+
+    # `created` a une granularité d'une seconde : sans cette attente, l'ancien code
+    # produirait parfois la même valeur et le test ne prouverait rien.
+    time.sleep(1.05)
+    runs.write_manifest(folder, archived=True, archive_sha="deadbeef")
+
+    apres = runs.read_manifest(folder)
+    assert apres["created"] == cree, "created est l'heure de création, pas celle de l'écriture"
+    assert apres["summary"] == "un graphe" and apres["files"] == ["code.py"]
+    assert apres["session"] == "s1", "une clé déjà consignée ne disparaît pas"
+    assert apres["keep"] is True and apres["mode"] == "dev"
+    assert apres["archived"] is True and apres["archive_sha"] == "deadbeef"
+
+
+def test_a_write_without_keep_does_not_clear_the_flag(root: Path) -> None:
+    """`keep` n'est pas remis à faux par une écriture qui ne parle pas de lui."""
+    folder = _run(root, "run-20260106-000000-gggggg", keep=True)
+    runs.write_manifest(folder, summary="autre chose")
+    assert runs.read_manifest(folder)["keep"] is True
+
+
+def test_an_archive_without_the_original_manifest_falls_back_to_the_entry(
+    root: Path, policy: runs.RunsPolicy, tmp_path: Path
+) -> None:
+    """Une archive d'avant ce correctif ne perd pas son manifeste pour autant.
+
+    Elle n'a pas de `run-manifest.json` : `restore` remet alors l'entrée du dépôt, plutôt
+    que de rendre un run muet sur son mode, son `keep` et sa session. L'empreinte n'est
+    plus celle d'origine, et c'est justement ce que ce test consigne.
+    """
+    folder = _run(root, "run-20260107-000000-hhhhhh", keep=True)
+    record = runs.archive(folder, policy=policy, root=root, summary="vieux format")
+
+    repo = policy.repo_path
+    work = tmp_path / "relecture"
+    work.mkdir()
+
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", f"--git-dir={repo}", f"--work-tree={work}", *args],
+            capture_output=True, text=True, check=True,
+        ).stdout
+
+    git("checkout", record["commit"], "--", ".")
+    (work / "runs" / folder.name / runs.RUN_MANIFEST).unlink()
+    git("add", "-A", ".")
+    git("-c", "user.name=uhb", "-c", "user.email=uhb@localhost", "commit", "-q",
+        "-m", "archive sans manifeste d'origine")
+    ancien = git("rev-parse", "HEAD").strip()
+
+    restored = runs.restore(ancien, policy=policy)
+
     manifest = runs.read_manifest(restored)
-    assert manifest["archived"] is True and manifest["archive_sha"] == record["sha256"]
+    assert manifest["run"] == folder.name and manifest["archived"] is True
+    assert manifest["sha256"] == record["sha256"]
+    assert (restored / "plot.png").read_text(encoding="utf-8") == "PNG-ish bytes"
 
 
 def test_two_archives_of_the_same_run_have_the_same_bytes(root: Path, policy: runs.RunsPolicy) -> None:
