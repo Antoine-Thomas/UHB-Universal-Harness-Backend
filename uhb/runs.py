@@ -38,6 +38,11 @@ from pathlib import Path
 from typing import Any
 
 MANIFEST = "manifest.json"
+#: Le manifeste **tel que le run l'a publié**, conservé à côté du bundle dans le dépôt.
+#: Il ne rentre pas dans le bundle (il porte un horodatage, qui casserait la
+#: déterminisme de l'empreinte), mais il doit revenir intact : sans lui, `restore`
+#: réinventait le manifeste et le SHA-256 du run restauré n'était plus celui de l'original.
+RUN_MANIFEST = "run-manifest.json"
 INDEX = "index.jsonl"
 DEFAULT_ARCHIVE = "~/.uhb/brain-runs.git"
 #: Files a run always carries and that never belong in an archive of "what it produced".
@@ -211,19 +216,32 @@ def read_manifest(folder: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def write_manifest(folder: Path, *, mode: str = "", keep: bool = False, **extra: Any) -> Path:
-    """Record what this run is, so a later policy can decide without guessing."""
+def write_manifest(folder: Path, *, mode: str = "", keep: bool | None = None, **extra: Any) -> Path:
+    """Record what this run is, so a later policy can decide without guessing.
+
+    L'écriture **fusionne** avec le manifeste déjà présent au lieu de le remplacer : un
+    second passage ajoute ses clés sans effacer `summary`, `files` ni `session`, et sans
+    redonner au run l'heure de l'écriture comme heure de création. Sinon un run gardé
+    « naît » au moment où on l'archive, et le manifeste restauré n'est plus celui qui a
+    été archivé - ce que le test de fidélité refuse, à juste titre.
+
+    ``keep=None`` conserve la valeur déjà consignée ; ``keep=True``/``False`` la fixe.
+    ``mode`` vide conserve le mode existant.
+    """
     folder = Path(folder)
-    data = {
+    existing = read_manifest(folder)
+    data: dict[str, Any] = {
+        **existing,
         "run": folder.name,
-        "tool": "execute_code",
-        "mode": mode,
-        "keep": bool(keep),
-        "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "tool": existing.get("tool") or "execute_code",
+        "mode": mode or str(existing.get("mode") or ""),
+        "keep": bool(existing.get("keep")) if keep is None else bool(keep),
+        "created": existing.get("created") or time.strftime("%Y-%m-%dT%H:%M:%S"),
         **{key: value for key, value in extra.items() if value is not None},
     }
     target = folder / MANIFEST
-    target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    target.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+                      newline="\n")
     return target
 
 
@@ -427,6 +445,12 @@ def archive(
         (target_dir / MANIFEST).write_text(
             json.dumps(entry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
+        # Le manifeste d'origine voyage à côté du bundle : c'est lui que `restore` remet
+        # en place, octet pour octet. Sans lui, la copie restaurée portait un manifeste
+        # reconstruit (heure d'archivage comprise) et ne pouvait plus être comparée.
+        origine = folder / MANIFEST
+        if origine.is_file():
+            (target_dir / RUN_MANIFEST).write_bytes(origine.read_bytes())
         index = work / INDEX
         line = json.dumps(
             {
@@ -441,6 +465,11 @@ def archive(
             ensure_ascii=False,
         )
         index.write_text(line + "\n", encoding="utf-8")
+        # Aucune conversion de fin de ligne dans le dépôt : le manifeste et le bundle
+        # doivent se relire OCTET POUR OCTET. Avec `core.autocrlf` (le défaut Windows),
+        # git réécrivait les CRLF en LF et le manifeste restauré changeait d'empreinte
+        # sans que personne n'ait touché au run.
+        (work / ".gitattributes").write_text("* -text\n", encoding="utf-8", newline="\n")
 
         try:
             _git(repo, "-c", "core.bare=false", "add", "-A", ".", work_tree=work)
@@ -464,8 +493,10 @@ def archive(
             # Fail closed: the run stays on disk, exactly as it was.
             raise RunsError(f"archivage impossible, le run est conservé : {exc}") from exc
 
-    write_manifest(folder, mode=str(manifest.get("mode") or ""), keep=True,
-                   archived=True, archive_sha=sha, archive_commit=head)
+    # Le manifeste du run n'est PAS réécrit ici : l'entrée Git porte déjà `archived`,
+    # `archive_sha` et `archive_commit`, et le manifeste vivant doit rester exactement
+    # celui que le bundle contient - le réécrire faisait diverger la copie restaurée de
+    # la copie archivée, et changeait `created` au passage.
     _drop(folder)
     return {"run": entry["run"], "sha256": sha, "commit": head, "bundle": entry["bundle"],
             "bytes": entry["bytes"], "source_bytes": entry["source_bytes"], "repo": str(repo)}
@@ -539,8 +570,20 @@ def restore(sha: str, *, policy: RunsPolicy | None = None) -> Path:
     # validée ici. `filter="data"` n'existe pas en 3.10 et laissait la CI rouge ; surtout, une
     # détection de compatibilité aurait produit deux chemins de code dont un seul est testé.
     _extract_bundle(payload, destination)
-    write_manifest(destination, mode=str(entry.get("mode") or ""), keep=True,
-                   archived=True, archive_sha=entry.get("sha256"), archive_commit=resolved)
+    # Le manifeste revient tel qu'il a été archivé (même octets, même SHA-256) : il est
+    # stocké à côté du bundle, pas dedans, parce qu'il porte un horodatage qui casserait
+    # le déterminisme de l'empreinte. S'il n'y en avait pas, il n'y en a pas : on
+    # n'invente rien.
+    origine = f"{bundle.rsplit('/', 1)[0]}/{RUN_MANIFEST}"
+    if origine in listing:
+        (destination / MANIFEST).write_bytes(_git_binary(repo, f"{resolved}:{origine}"))
+    else:
+        # Archive antérieure à la conservation du manifeste d'origine : le run revient
+        # avec l'entrée du dépôt plutôt que sans manifeste. Son SHA-256 ne peut alors pas
+        # être celui d'origine - c'est écrit ici pour que personne ne le suppose.
+        (destination / MANIFEST).write_text(
+            json.dumps(entry, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
+            newline="\n")
     return destination
 
 
