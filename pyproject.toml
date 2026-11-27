@@ -60,6 +60,7 @@ include-package-data = false
          "tools/*.md",
          "services/mari/*.md", "services/mari/bridge/*.cs",
          "services/mari/bridge/*.csproj", "services/mari/bridge/*.json"]
+"uhb.core" = ["model_catalog.json"]
 "uhb.hub.modes" = ["profiles/*.json"]
 "uhb.hub.router" = ["catalog.json"]
 "uhb.hub.wiki" = ["wiki/*.md"]

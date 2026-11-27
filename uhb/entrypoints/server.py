@@ -70,7 +70,8 @@ DEFAULT_PORT = 8101
 #: POST routes. They share the visitor checks (Origin, Content-Type) and
 #: nothing else: `/route` plans a turn, it does not run one.
 POST_ROUTES = ("/v1/chat/completions", "/v1/messages", "/route", "/rag/reindex",
-               "/tools/execute", "/tools/approvals", "/runs", "/shutdown")
+               "/tools/execute", "/tools/approvals", "/runs", "/shutdown",
+               "/machine/scan", "/models/pull")
 
 #: How long an approval stays usable, and why a nonce rather than a boolean: a body
 #: carrying `approved: true` proves nothing, since any client can send it. UHB issues
@@ -277,6 +278,32 @@ class Handler(BaseHTTPRequestHandler):
             except lifecycle.RunsError as exc:
                 self._json(409, {"error": {"message": str(exc), "type": "runs_error"}})
             return
+        if path == "/models/catalog":
+            # The catalogue is policy: UH reads it here and never keeps a copy.
+            from ..core import machine as models
+
+            try:
+                book = models.load_catalog()
+            except models.MachineError as exc:
+                self._json(exc.status, {"error": {"message": str(exc), "type": "catalog"}})
+                return
+            self._json(200, book)
+            return
+        if path == "/machine/profile":
+            # Measured, never guessed: `unknown` names what could not be read.
+            from ..core import machine as models
+
+            self._json(200, models.measure_profile())
+            return
+        if path.startswith("/models/pull/"):
+            from ..core import machine as models
+
+            run_id = path.split("/models/pull/", 1)[1]
+            try:
+                self._json(200, models.pull_status(run_id))
+            except models.MachineError as exc:
+                self._json(exc.status, {"error": {"message": str(exc), "type": "pull"}})
+            return
         if path == "/rag/status":
             # What is on disk, and whether the separate RAG service is up. No
             # index is ever built here: it is compiled from the operator's notes.
@@ -362,6 +389,25 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/route":
             self._plan(payload)
+        elif path == "/machine/scan":
+            from ..core import machine as models
+
+            try:
+                self._json(200, models.scan(category=str(payload.get("category") or "chat")))
+            except models.MachineError as exc:
+                self._json(exc.status, {"error": {"message": str(exc), "type": "machine"}})
+        elif path == "/models/pull":
+            from ..core import machine as models
+
+            try:
+                started = models.start_pull(
+                    entry_id=str(payload.get("entry_id") or ""),
+                    accept=payload.get("accept") is True,
+                )
+            except models.MachineError as exc:
+                self._json(exc.status, {"error": {"message": str(exc), "type": "pull"}})
+                return
+            self._json(202, started)
         elif path == "/rag/reindex":
             self._rag_reindex(payload)
         elif path == "/tools/execute":
